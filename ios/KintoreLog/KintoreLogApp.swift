@@ -20,6 +20,7 @@ struct RootView: View {
             LogView().tabItem { Label("記録", systemImage: "dumbbell.fill") }
             HistoryView().tabItem { Label("履歴", systemImage: "calendar") }
             StatsView().tabItem { Label("分析", systemImage: "chart.bar.fill") }
+            BodyView().tabItem { Label("からだ", systemImage: "figure") }
             MenuView().tabItem { Label("メニュー", systemImage: "list.bullet") }
         }
         .safeAreaInset(edge: .bottom) { RestTimerBar().padding(.bottom, 56) }

@@ -398,3 +398,15 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 @keyframes pop { from { transform: scale(1.4); } to { transform: scale(1); } }
 @keyframes ring { from { transform: scale(.55); opacity: .55; } to { transform: scale(1.5); opacity: 0; } }
 @keyframes blink { from { opacity: 1; } to { opacity: .35; } }
+
+/* ── からだタブ ── */
+.tile.tap { text-align: left; display: flex; flex-direction: column; justify-content: flex-start; width: 100%; font: inherit; color: inherit; }
+.tile.tap:active { transform: scale(.97); }
+.body-row { width: 100%; text-align: left; }
+.body-date { font-weight: 600; }
+.body-v { display: flex; align-items: baseline; gap: 10px; font-variant-numeric: tabular-nums; }
+.body-v small { min-width: 3.2em; text-align: right; }
+.card.dense .pt::after { width: 5px; height: 5px; box-shadow: none; }
+.card.dense .pt.on::after { width: 12px; height: 12px; box-shadow: 0 0 0 2px var(--surface); }
+.field input[type="date"] { -webkit-appearance: none; appearance: none; text-align: left; }
+.tab span:last-child { white-space: nowrap; }
