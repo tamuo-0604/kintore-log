@@ -37,8 +37,8 @@ const KINDS = {
   weight: '重量 × 回数', body: '回数のみ（自重）', time: '時間（秒）',
   hiit: 'HIIT（タイマー）', cardio: '距離 × 時間（ランニングなど）',
 };
-const DATA_VERSION = 4; // 4 で体重・身長の記録を追加
-//   これまでの版: 2 で HIIT・有酸素、3 で HIIT の開始前の準備時間を追加
+const DATA_VERSION = 5; // 5 で筋肉量・ウエスト・目標体重を追加
+//   これまでの版: 2 で HIIT・有酸素、3 で HIIT の開始前の準備時間、4 で体重・身長を追加
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -86,9 +86,11 @@ function defaultState() {
     epoch: 0,
     exercises: seedExercises(),
     sets: [],
-    body: [], // からだの記録。{ id:'b-日付', date, weight(kg), fat(体脂肪率%。未入力は0), u }  ※1日1件
+    // からだの記録（1日1件）。{ id:'b-日付', date, weight(体重kg), fat(体脂肪率%), muscle(筋肉量kg), waist(ウエストcm), u }
+    // 体重以外は任意で、未入力は 0
+    body: [],
     deleted: { sets: {}, exercises: {}, body: {} },
-    settings: { restSec: 90, restAuto: true, sound: true, loud: true, height: 0, u: 0 }, // height は身長(cm)。未入力は0
+    settings: { restSec: 90, restAuto: true, sound: true, loud: true, height: 0, goalWeight: 0, u: 0 }, // height=身長(cm)、goalWeight=目標体重(kg)。未入力は0
   };
 }
 
@@ -128,7 +130,8 @@ function normalize(raw) {
     .map(([k, v]) => [k, num(v)]).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
   const body = (Array.isArray(raw.body) ? raw.body : [])
     .filter((b) => b && /^\d{4}-\d{2}-\d{2}$/.test(b.date) && num(b.weight) > 0)
-    .map((b) => ({ id: 'b-' + b.date, date: b.date, weight: num(b.weight), fat: Math.min(80, Math.max(0, num(b.fat))), u: num(b.u) }))
+    .map((b) => ({ id: 'b-' + b.date, date: b.date, weight: num(b.weight), fat: Math.min(80, Math.max(0, num(b.fat))),
+      muscle: Math.min(200, Math.max(0, num(b.muscle))), waist: Math.min(300, Math.max(0, num(b.waist))), u: num(b.u) }))
     .sort((a, b) => (a.date < b.date ? -1 : 1))
     .filter((b, i, arr) => i === arr.length - 1 || arr[i + 1].date !== b.date); // 同じ日が重なっていたら1件に
   const st = raw.settings || {};
@@ -142,6 +145,7 @@ function normalize(raw) {
       sound: st.sound !== false,
       loud: st.loud !== false, // HIIT タイマー中は消音モードでも鳴らす
       height: Math.min(260, Math.max(0, num(st.height))),
+      goalWeight: Math.min(300, Math.max(0, num(st.goalWeight))),
       u: num(st.u),
     },
   };
@@ -699,7 +703,7 @@ const ui = {
   weight: 0, reps: 0, // 入力中の値
   month: today().slice(0, 7), day: today(), // 履歴タブ
   statMode: 'volume', statEx: null, pick: null, // 分析タブ
-  bodyMetric: 'weight', bodyRange: 90,          // からだタブ
+  bodyMetric: 'weight', bodyRange: 90,          // からだタブ（グラフの項目と期間）
 };
 
 const TABS = [['log', '記録'], ['history', '履歴'], ['stats', '分析'], ['body', 'からだ'], ['menu', 'メニュー']];
@@ -997,8 +1001,11 @@ function columns(data, unit, key) {
 }
 
 // 折れ線グラフ（1系列）。点をタップ／ホバーすると値を表示
-function line(points, unit, key) {
-  const vals = points.map((p) => p.value);
+// opts.goal: 目標値の横線を引く / points[i].avg: 平均線（あれば太線で描き、毎日の値は細い線にする）
+function line(points, unit, key, opts = {}) {
+  const hasAvg = points.some((p) => p.avg != null);
+  const vals = points.flatMap((p) => (p.avg != null ? [p.value, p.avg] : [p.value]));
+  if (opts.goal > 0) vals.push(opts.goal);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (hi === lo) { hi += 1; lo = Math.max(0, lo - 1); }
   const padV = (hi - lo) * 0.15; lo = Math.max(0, lo - padV); hi += padV;
@@ -1006,19 +1013,26 @@ function line(points, unit, key) {
   const Y = (v) => 100 - ((v - lo) / (hi - lo)) * 100;
   const sel = ui.pick && ui.pick.key === key ? ui.pick.i : points.length - 1;
   const pick = (i) => () => { if (!(ui.pick && ui.pick.key === key && ui.pick.i === i)) { ui.pick = { key, i }; render(); } };
-  const path = points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(2)},${Y(p.value).toFixed(2)}`).join(' ');
-  return h('div', { class: 'chart' },
-    h('div', { class: 'readout' }, h('span', {}, points[sel].tip), h('strong', {}, fmtNum(points[sel].value), h('small', {}, unit))),
+  const pathOf = (get) => points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(2)},${Y(get(p)).toFixed(2)}`).join(' ');
+  const svg = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path${hasAvg ? ' class="raw"' : ''} d="${pathOf((p) => p.value)}"/>`
+    + (hasAvg ? `<path d="${pathOf((p) => p.avg)}"/>` : '') + '</svg>';
+  return h('div', { class: 'chart' + (hasAvg ? ' has-avg' : '') },
+    h('div', { class: 'readout' },
+      h('span', {}, points[sel].tip, hasAvg && h('small', {}, `7日平均 ${fmtNum(points[sel].avg)}${unit}`)),
+      h('strong', {}, fmtNum(points[sel].value), h('small', {}, unit))),
     h('div', { class: 'line' },
       h('div', { class: 'line-y' }, h('span', {}, fmtNum(hi)), h('span', {}, fmtNum((hi + lo) / 2)), h('span', {}, fmtNum(lo))),
       h('div', { class: 'line-plot' },
-        h('div', { html: `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${path}"/></svg>` }),
+        opts.goal > 0 && h('div', { class: 'goal-line', style: `top:${Y(opts.goal)}%` }, h('span', {}, `目標 ${fmtNum(opts.goal)}${unit}`)),
+        h('div', { html: svg }),
         points.map((p, i) => h('button', {
           type: 'button', class: 'pt' + (i === sel ? ' on' : ''), style: `left:${X(i)}%;top:${Y(p.value)}%`,
           'aria-label': `${p.tip} ${fmtNum(p.value)}${unit}`,
           onclick: pick(i), onpointerenter: (e) => { if (e.pointerType === 'mouse') pick(i)(); },
         })))),
-    h('div', { class: 'line-x' }, h('span', {}, points[0].label), points.length > 1 && h('span', {}, points[points.length - 1].label)));
+    h('div', { class: 'line-x' }, h('span', {}, points[0].label),
+      hasAvg && h('span', { class: 'legend' }, h('i', { class: 'lg-raw' }), '毎日', h('i', { class: 'lg-avg' }), '7日平均'),
+      points.length > 1 && h('span', {}, points[points.length - 1].label)));
 }
 
 function seg(options, value, onPick) {
@@ -1108,19 +1122,25 @@ function viewStats() {
         (ex.kind === 'weight' ? '推定1RM＝重量×(1＋回数÷30)。' : '') + (allPts.length > 20 ? '直近20回分を表示。' : ''))));
 }
 
-/* ── からだタブ（体重・体脂肪率・身長） ── */
+/* ── からだタブ（体重・体脂肪率・筋肉量・ウエスト・身長・目標体重） ── */
+
+// グラフで切り替えられる項目
+const BODY_METRICS = { weight: ['体重', 'kg'], fat: ['体脂肪率', '%'], muscle: ['筋肉量', 'kg'], waist: ['ウエスト', 'cm'] };
 
 function bodyDialog(rec) {
   const lastRec = state.body[state.body.length - 1];
-  const d = rec ? { ...rec } : { date: today(), weight: lastRec ? lastRec.weight : 60, fat: 0 };
+  const d = rec ? { ...rec } : { date: today(), weight: lastRec ? lastRec.weight : 60, fat: 0, muscle: 0, waist: 0 };
   const numIn = (label, val, set, ph) => h('label', { class: 'field' }, h('span', {}, label),
     h('input', { type: 'number', inputMode: 'decimal', step: 'any', min: '0', value: val ? String(val) : '', placeholder: ph, oninput: (e) => set(parseFloat(e.target.value) || 0) }));
   openDialog(rec ? `${mdw(rec.date)} の記録` : 'からだを記録', [
     h('label', { class: 'field' }, h('span', {}, '日付'),
       h('input', { type: 'date', value: d.date, max: today(), onchange: (e) => { if (e.target.value) d.date = e.target.value; } })),
+    numIn('体重 (kg)', d.weight, (v) => { d.weight = v; }, '例: 65.5'),
+    h('div', { class: 'eyebrow dlg-sep' }, 'わかる項目だけで OK（空欄可）'),
     h('div', { class: 'field-row' },
-      numIn('体重 (kg)', d.weight, (v) => { d.weight = v; }, '例: 65.5'),
-      numIn('体脂肪率 (%)', d.fat, (v) => { d.fat = v; }, '空欄でも OK')),
+      numIn('体脂肪率 (%)', d.fat, (v) => { d.fat = v; }, '例: 18.5'),
+      numIn('筋肉量 (kg)', d.muscle, (v) => { d.muscle = v; }, '例: 52.0')),
+    numIn('ウエスト (cm)', d.waist, (v) => { d.waist = v; }, '例: 78'),
     !rec && state.body.some((b) => b.date === d.date) && h('p', { class: 'hint' }, '今日の記録はすでにあります。保存すると上書きします。'),
   ], [
     rec && { label: '削除', kind: 'danger', run: () => { removeBody(rec.id); save(); toast('削除しました'); render(); } },
@@ -1128,82 +1148,114 @@ function bodyDialog(rec) {
     { label: '保存', kind: 'primary', run: () => {
       if (!(d.weight >= 20 && d.weight <= 300)) { toast('体重は 20〜300kg の範囲で入力してください'); return false; }
       if (d.fat < 0 || d.fat > 70) { toast('体脂肪率は 0〜70% の範囲で入力してください'); return false; }
+      if (d.muscle < 0 || d.muscle > d.weight) { toast('筋肉量は体重より小さい値で入力してください'); return false; }
+      if (d.waist < 0 || d.waist > 250) { toast('ウエストは 250cm までで入力してください'); return false; }
       if (d.date > today()) { toast('未来の日付は記録できません'); return false; }
       if (rec && rec.date !== d.date) removeBody(rec.id); // 日付を変えたら、元の日の記録は消す
-      const id = 'b-' + d.date;
+      const id = 'b-' + d.date, r1 = (v) => Math.round(v * 10) / 10;
       state.body = state.body.filter((b) => b.id !== id);
-      state.body.push({ id, date: d.date, weight: Math.round(d.weight * 100) / 100, fat: Math.round(d.fat * 10) / 10, u: Date.now() });
+      state.body.push({ id, date: d.date, weight: Math.round(d.weight * 100) / 100, fat: r1(d.fat), muscle: r1(d.muscle), waist: r1(d.waist), u: Date.now() });
       state.body.sort((a, b) => (a.date < b.date ? -1 : 1));
       save(); toast('記録しました'); render();
     } },
   ].filter(Boolean));
 }
 
-function heightDialog() {
-  let v = state.settings.height;
-  openDialog('身長', [
-    h('label', { class: 'field' }, h('span', {}, '身長 (cm)'),
-      h('input', { type: 'number', inputMode: 'decimal', step: 'any', min: '0', value: v ? String(v) : '', placeholder: '例: 170', oninput: (e) => { v = parseFloat(e.target.value) || 0; } })),
-    h('p', { class: 'hint' }, 'BMI と標準体重の計算に使います。'),
+// 身長・目標体重など「1つの数値」を設定するダイアログ
+function settingDialog(title, label, key, min, max, hint, canClear) {
+  let v = state.settings[key];
+  const apply = (val) => { state.settings[key] = val; state.settings.u = Date.now(); save(); toast('保存しました'); render(); };
+  openDialog(title, [
+    h('label', { class: 'field' }, h('span', {}, label),
+      h('input', { type: 'number', inputMode: 'decimal', step: 'any', min: '0', value: v ? String(v) : '', oninput: (e) => { v = parseFloat(e.target.value) || 0; } })),
+    h('p', { class: 'hint' }, hint),
   ], [
+    canClear && state.settings[key] > 0 && { label: '設定を消す', kind: 'danger', run: () => apply(0) },
     { label: 'キャンセル' },
     { label: '保存', kind: 'primary', run: () => {
-      if (!(v >= 100 && v <= 250)) { toast('身長は 100〜250cm の範囲で入力してください'); return false; }
-      state.settings.height = Math.round(v * 10) / 10; state.settings.u = Date.now();
-      save(); toast('保存しました'); render();
+      if (!(v >= min && v <= max)) { toast(`${min}〜${max} の範囲で入力してください`); return false; }
+      apply(Math.round(v * 10) / 10);
     } },
-  ]);
+  ].filter(Boolean));
+}
+const heightDialog = () => settingDialog('身長', '身長 (cm)', 'height', 100, 250, 'BMI と標準体重の計算に使います。');
+const goalDialog = () => settingDialog('目標体重', '目標体重 (kg)', 'goalWeight', 20, 300, 'グラフに目標の線が入り、あと何 kg かが表示されます。', true);
+
+// 体重グラフ用: その日を含む直近7日間の平均（毎日の増減をならして、本当の傾向を見る）
+function weightAverages(list) {
+  return list.map((b) => {
+    const from = addDays(b.date, -6);
+    const win = list.filter((x) => x.date >= from && x.date <= b.date);
+    return win.reduce((a, x) => a + x.weight, 0) / win.length;
+  });
 }
 
 function viewBody() {
   const list = state.body;
   const last = list[list.length - 1], prev = list[list.length - 2];
-  const height = state.settings.height;
+  const { height, goalWeight: goal } = state.settings;
   const m2 = height > 0 ? (height / 100) ** 2 : 0;
-  const lastFat = [...list].reverse().find((b) => b.fat > 0);
+  const latest = (key) => [...list].reverse().find((b) => b[key] > 0);
+  const lastFat = latest('fat'), lastMuscle = latest('muscle'), lastWaist = latest('waist');
   const diff = last && prev ? last.weight - prev.weight : null;
+  const signed = (v, unit) => `${v > 0 ? '+' : v < 0 ? '−' : '±'}${fmtNum(Math.abs(v))}${unit}`;
+  // 目標まであとどれくらいか。最初の記録より軽い目標なら「減量」、重い目標なら「増量」とみなす
+  let goalSub = 'タップして設定';
+  if (goal > 0 && last) {
+    const losing = list[0].weight >= goal;
+    const reached = losing ? last.weight <= goal : last.weight >= goal;
+    goalSub = reached ? '達成！おめでとうございます' : `あと ${signed(goal - last.weight, 'kg')}`;
+  } else if (goal > 0) goalSub = '体重を記録すると差が出ます';
+  const tapTile = (label, value, unit, sub, onclick) => h('button', { type: 'button', class: 'tile tap', onclick },
+    h('div', { class: 'tile-k' }, label),
+    h('div', { class: 'tile-v' }, value, unit && h('small', {}, unit)),
+    h('div', { class: 'tile-sub' }, sub));
+
   const head = h('header', { class: 'page-head' },
     h('div', {}, h('div', { class: 'eyebrow' }, 'BODY'), h('h1', {}, 'からだ')),
     h('button', { type: 'button', class: 'btn primary', onclick: () => bodyDialog(list.find((b) => b.date === today()) || null) }, icon('plus'), '記録'));
   const tiles = h('div', { class: 'tiles four' },
     tile('体重', last ? fmtNum(last.weight) : '—', last ? 'kg' : '',
-      diff != null ? `前回比 ${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${fmtNum(Math.abs(diff))}kg（${md(prev.date)}）` : last ? md(last.date) : 'まだ記録がありません'),
+      diff != null ? `前回比 ${signed(diff, 'kg')}（${md(prev.date)}）` : last ? md(last.date) : 'まだ記録がありません'),
+    tapTile('目標体重', goal ? fmtNum(goal) : '—', goal ? 'kg' : '', goalSub, goalDialog),
     tile('BMI', last && m2 ? fmtNum(last.weight / m2) : '—', '', m2 ? `標準体重 ${fmtNum(22 * m2)}kg` : '身長を入れると計算します'),
     tile('体脂肪率', lastFat ? fmtNum(lastFat.fat) : '—', lastFat ? '%' : '',
-      lastFat && last ? `除脂肪体重 ${fmtNum(last.weight * (1 - lastFat.fat / 100))}kg` : '入力は任意です'),
-    h('button', { type: 'button', class: 'tile tap', onclick: heightDialog },
-      h('div', { class: 'tile-k' }, '身長'),
-      h('div', { class: 'tile-v' }, height ? fmtNum(height) : '—', height ? h('small', {}, 'cm') : null),
-      h('div', { class: 'tile-sub' }, 'タップして変更')));
+      lastFat && last ? `除脂肪体重 ${fmtNum(last.weight * (1 - lastFat.fat / 100))}kg` : '入力は任意です'));
+  const facts = h('div', { class: 'chips facts' },
+    h('button', { type: 'button', class: 'chip', onclick: heightDialog }, '身長 ', h('b', {}, height ? `${fmtNum(height)}cm` : '未設定')),
+    lastMuscle && h('span', { class: 'chip' }, '筋肉量 ', h('b', {}, `${fmtNum(lastMuscle.muscle)}kg`)),
+    lastWaist && h('span', { class: 'chip' }, 'ウエスト ', h('b', {}, `${fmtNum(lastWaist.waist)}cm`)));
 
   if (!list.length) {
-    return h('div', {}, head, tiles,
+    return h('div', {}, head, tiles, facts,
       h('section', { class: 'card empty' }, h('div', { class: 'empty-art' }, icon('body')),
         h('p', {}, '体重を記録すると、ここに推移のグラフが表示されます')));
   }
 
+  const metric = ui.bodyMetric, unit = BODY_METRICS[metric][1];
   const from = addDays(today(), -ui.bodyRange);
-  const pts = list.filter((b) => b.date >= from && (ui.bodyMetric === 'weight' || b.fat > 0))
-    .map((b) => ({ label: md(b.date), tip: mdw(b.date), value: ui.bodyMetric === 'weight' ? b.weight : b.fat }));
+  const avgs = metric === 'weight' ? weightAverages(list) : null;
+  const pts = list.map((b, i) => ({ b, i })).filter(({ b }) => b.date >= from && b[metric] > 0)
+    .map(({ b, i }) => ({ label: md(b.date), tip: mdw(b.date), value: b[metric], avg: avgs && list.length >= 7 ? avgs[i] : undefined }));
+  const available = Object.keys(BODY_METRICS).filter((k) => k === 'weight' || k === 'fat' || list.some((b) => b[k] > 0));
   const chart = h('section', { class: 'card' + (pts.length > 40 ? ' dense' : '') },
     h('header', { class: 'card-head' },
-      seg([['weight', '体重'], ['fat', '体脂肪率']], ui.bodyMetric, (v) => { ui.bodyMetric = v; }),
+      seg(available.map((k) => [k, BODY_METRICS[k][0]]), metric, (v) => { ui.bodyMetric = v; }),
       seg([[30, '1ヶ月'], [90, '3ヶ月'], [365, '1年']], ui.bodyRange, (v) => { ui.bodyRange = v; })),
-    pts.length ? line(pts, ui.bodyMetric === 'weight' ? 'kg' : '%', `body:${ui.bodyMetric}:${ui.bodyRange}`)
+    pts.length ? line(pts, unit, `body:${metric}:${ui.bodyRange}`, { goal: metric === 'weight' ? goal : 0 })
       : h('p', { class: 'muted pad' }, 'この期間の記録がありません'),
-    pts.length > 1 && h('p', { class: 'hint' }, (() => {
-      const d = pts[pts.length - 1].value - pts[0].value, unit = ui.bodyMetric === 'weight' ? 'kg' : 'ポイント';
-      return `この期間で ${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmtNum(Math.abs(d))}${unit}（${pts[0].label} → ${pts[pts.length - 1].label}）`;
-    })()));
+    pts.length > 1 && h('p', { class: 'hint' },
+      `この期間で ${signed(pts[pts.length - 1].value - pts[0].value, metric === 'fat' ? 'ポイント' : unit)}（${pts[0].label} → ${pts[pts.length - 1].label}）`));
 
   const history = h('section', { class: 'card list' },
     h('div', { class: 'eyebrow' }, '記録'),
     [...list].reverse().slice(0, 60).map((b) => h('button', { type: 'button', class: 'row body-row', onclick: () => bodyDialog(b) },
       h('span', { class: 'body-date' }, mdw(b.date)),
-      h('span', { class: 'body-v' }, h('b', {}, `${fmtNum(b.weight)}kg`), b.fat > 0 && h('small', {}, `${fmtNum(b.fat)}%`)))),
+      h('span', { class: 'body-v' }, h('b', {}, `${fmtNum(b.weight)}kg`),
+        h('small', {}, [b.fat > 0 && `${fmtNum(b.fat)}%`, b.muscle > 0 && `筋 ${fmtNum(b.muscle)}kg`, b.waist > 0 && `W ${fmtNum(b.waist)}cm`].filter(Boolean).join('・'))))),
     h('p', { class: 'hint' }, 'タップすると修正・削除できます' + (list.length > 60 ? '（直近60件を表示）' : '')));
 
-  return h('div', { class: 'two-col' }, h('div', {}, head, tiles, chart), h('div', { class: 'col-side' }, history));
+  return h('div', { class: 'two-col' }, h('div', {}, head, tiles, facts, chart), h('div', { class: 'col-side' }, history));
 }
 
 /* ── メニュータブ（メニュー管理＋設定） ── */
@@ -1306,7 +1358,8 @@ function exportCsv() {
   download(`kintore-log-${today()}.csv`, '\uFEFF' + rows.join('\r\n'), 'text/csv'); // BOM 付き＝Excel で文字化けしない
 }
 function exportBodyCsv() {
-  const rows = ['日付,体重(kg),体脂肪率(%)', ...state.body.map((b) => [b.date, b.weight, b.fat > 0 ? b.fat : ''].join(','))];
+  const rows = ['日付,体重(kg),体脂肪率(%),筋肉量(kg),ウエスト(cm)',
+    ...state.body.map((b) => [b.date, b.weight, b.fat || '', b.muscle || '', b.waist || ''].join(','))];
   download(`kintore-body-${today()}.csv`, '\uFEFF' + rows.join('\r\n'), 'text/csv');
 }
 function importJson(file) {

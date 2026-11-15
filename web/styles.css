@@ -405,8 +405,24 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .body-row { width: 100%; text-align: left; }
 .body-date { font-weight: 600; }
 .body-v { display: flex; align-items: baseline; gap: 10px; font-variant-numeric: tabular-nums; }
-.body-v small { min-width: 3.2em; text-align: right; }
+.body-v small { text-align: right; white-space: nowrap; }
 .card.dense .pt::after { width: 5px; height: 5px; box-shadow: none; }
 .card.dense .pt.on::after { width: 12px; height: 12px; box-shadow: 0 0 0 2px var(--surface); }
 .field input[type="date"] { -webkit-appearance: none; appearance: none; text-align: left; }
 .tab span:last-child { white-space: nowrap; }
+
+/* からだ: 目標の線・7日平均・補足の数値 */
+.chips.facts { margin: -4px 0 14px; }
+.chips.facts .chip { font-weight: 500; color: var(--text-2); min-height: 34px; }
+.chips.facts .chip b { color: var(--text); margin-left: 4px; }
+.dlg-sep { margin: 4px 0 10px; }
+.readout span small { display: block; margin-top: 2px; }
+.chart.has-avg .line-plot path.raw { stroke-width: 1; opacity: .45; }
+.chart.has-avg .line-plot path:not(.raw) { stroke-width: 3; }
+.chart.has-avg .pt::after { width: 5px; height: 5px; box-shadow: none; opacity: .6; }
+.chart.has-avg .pt.on::after { width: 12px; height: 12px; opacity: 1; box-shadow: 0 0 0 2px var(--surface); }
+.line-plot > .goal-line { position: absolute; left: 0; right: 0; bottom: auto; height: 0; border-top: 1.5px solid var(--text-2); pointer-events: none; }
+.goal-line span { position: absolute; right: 0; bottom: 3px; font-size: 10px; font-weight: 700; color: var(--text-2); background: var(--surface); padding: 0 4px; border-radius: 4px; }
+.legend { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { display: inline-block; width: 14px; border-top: 1px solid var(--accent); opacity: .6; }
+.legend i.lg-avg { border-top-width: 3px; opacity: 1; margin-left: 8px; }

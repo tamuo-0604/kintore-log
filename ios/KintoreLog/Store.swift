@@ -38,6 +38,7 @@ struct AppSettings: Codable, Hashable {
     var u: Double? = nil
     var loud: Bool? = nil     // PWA 版の設定（ネイティブ版では使わないが、消さずに保持する）
     var height: Double? = nil // 身長(cm)
+    var goalWeight: Double? = nil // 目標体重(kg)
 }
 
 /// からだの記録（1日1件）。id は "b-日付"
@@ -47,6 +48,8 @@ struct BodyRecord: Codable, Identifiable, Hashable {
     var weight: Double       // 体重(kg)
     var fat: Double          // 体脂肪率(%)。未入力は 0
     var u: Double? = nil
+    var muscle: Double? = nil // 筋肉量(kg)
+    var waist: Double? = nil  // ウエスト(cm)
 }
 
 /// 削除した記録・メニューの id と削除時刻。同期で他の端末からも消すための印
@@ -347,12 +350,13 @@ final class Store: ObservableObject {
     var bodyRecords: [BodyRecord] { (data.body ?? []).sorted { $0.date < $1.date } }
 
     /// その日の記録を保存する（同じ日があれば上書き）
-    func saveBody(date: String, weight: Double, fat: Double) {
+    func saveBody(date: String, weight: Double, fat: Double, muscle: Double, waist: Double) {
         var d = data
         var list = d.body ?? []
         let id = "b-" + date
         list.removeAll { $0.id == id }
-        list.append(BodyRecord(id: id, date: date, weight: (weight * 100).rounded() / 100, fat: (fat * 10).rounded() / 10, u: Store.nowMs))
+        list.append(BodyRecord(id: id, date: date, weight: (weight * 100).rounded() / 100, fat: (fat * 10).rounded() / 10, u: Store.nowMs,
+                               muscle: (muscle * 10).rounded() / 10, waist: (waist * 10).rounded() / 10))
         d.body = list.sorted { $0.date < $1.date }
         data = d
     }
@@ -365,6 +369,13 @@ final class Store: ObservableObject {
         bodyTomb[id] = Store.nowMs
         tomb.body = bodyTomb
         d.deleted = tomb
+        data = d
+    }
+
+    func setGoalWeight(_ kg: Double) {
+        var d = data
+        d.settings.goalWeight = (kg * 10).rounded() / 10
+        d.settings.u = Store.nowMs
         data = d
     }
 
