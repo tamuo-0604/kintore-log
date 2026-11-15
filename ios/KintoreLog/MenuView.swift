@@ -39,12 +39,14 @@ struct MenuView: View {
 
                 Section("休憩タイマー") {
                     Toggle("記録したら自動でスタート", isOn: $store.data.settings.restAuto)
+                        .onChange(of: store.data.settings.restAuto) { store.touchSettings() }
                     Picker("休憩時間", selection: $store.data.settings.restSec) {
                         Text("60秒").tag(60.0)
                         Text("90秒").tag(90.0)
                         Text("2分").tag(120.0)
                         Text("3分").tag(180.0)
                     }
+                    .onChange(of: store.data.settings.restSec) { store.touchSettings() }
                 }
 
                 Section {
@@ -53,7 +55,7 @@ struct MenuView: View {
                 } header: {
                     Text("データ")
                 } footer: {
-                    Text("記録はこの端末の中だけに保存されます。Web 版（PWA）のバックアップもそのまま読み込めます。")
+                    Text("ネイティブ版は端末間の自動同期にまだ対応していません。Web 版（PWA）のバックアップはそのまま読み込めます。")
                 }
             }
             .navigationTitle("メニュー")

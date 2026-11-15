@@ -31,34 +31,43 @@ const KINDS = { weight: '重量 × 回数', body: '回数のみ（自重）', ti
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+// 最初から入っているメニュー。id を固定しているので、どの端末でも「同じメニュー」として同期できる
 function seedExercises() {
-  const E = (name, part, kind, weight, reps, step = 2.5) =>
-    ({ id: uid(), name, part, kind, step, defWeight: weight, defReps: reps, archived: false });
+  const E = (key, name, part, kind, weight, reps, step = 2.5) =>
+    ({ id: 'seed-' + key, name, part, kind, step, defWeight: weight, defReps: reps, archived: false, u: 0 });
   return [
-    E('ベンチプレス', 'chest', 'weight', 40, 10),
-    E('ダンベルプレス', 'chest', 'weight', 14, 10, 2),
-    E('腕立て伏せ', 'chest', 'body', 0, 15),
-    E('デッドリフト', 'back', 'weight', 60, 5),
-    E('ラットプルダウン', 'back', 'weight', 35, 10),
-    E('懸垂', 'back', 'body', 0, 8),
-    E('スクワット', 'legs', 'weight', 50, 8),
-    E('レッグプレス', 'legs', 'weight', 80, 10, 5),
-    E('ブルガリアンスクワット', 'legs', 'body', 0, 10),
-    E('ショルダープレス', 'shoulders', 'weight', 20, 10),
-    E('サイドレイズ', 'shoulders', 'weight', 5, 15, 1),
-    E('アームカール', 'arms', 'weight', 10, 12, 1),
-    E('トライセプスプレスダウン', 'arms', 'weight', 20, 12),
-    E('クランチ', 'abs', 'body', 0, 20),
-    E('プランク', 'abs', 'time', 0, 60),
+    E('bench-press', 'ベンチプレス', 'chest', 'weight', 40, 10),
+    E('dumbbell-press', 'ダンベルプレス', 'chest', 'weight', 14, 10, 2),
+    E('push-up', '腕立て伏せ', 'chest', 'body', 0, 15),
+    E('deadlift', 'デッドリフト', 'back', 'weight', 60, 5),
+    E('lat-pulldown', 'ラットプルダウン', 'back', 'weight', 35, 10),
+    E('pull-up', '懸垂', 'back', 'body', 0, 8),
+    E('squat', 'スクワット', 'legs', 'weight', 50, 8),
+    E('leg-press', 'レッグプレス', 'legs', 'weight', 80, 10, 5),
+    E('bulgarian-squat', 'ブルガリアンスクワット', 'legs', 'body', 0, 10),
+    E('shoulder-press', 'ショルダープレス', 'shoulders', 'weight', 20, 10),
+    E('side-raise', 'サイドレイズ', 'shoulders', 'weight', 5, 15, 1),
+    E('arm-curl', 'アームカール', 'arms', 'weight', 10, 12, 1),
+    E('triceps-pressdown', 'トライセプスプレスダウン', 'arms', 'weight', 20, 12),
+    E('crunch', 'クランチ', 'abs', 'body', 0, 20),
+    E('plank', 'プランク', 'abs', 'time', 0, 60),
   ];
 }
 
+/* データの形
+ *   exercises: メニュー。u は最終更新時刻（ミリ秒）
+ *   sets:      記録。{ id, exId, date:'YYYY-MM-DD', ts, weight, reps, u }  ※time タイプは reps に秒数
+ *   deleted:   削除した記録・メニューの id と削除時刻。同期のとき「他の端末でも消す」ために残す
+ *   epoch:     「全削除」「バックアップから復元」をした時刻。新しいほうが丸ごと優先される
+ */
 function defaultState() {
   return {
     version: 1,
+    epoch: 0,
     exercises: seedExercises(),
-    sets: [], // { id, exId, date:'YYYY-MM-DD', ts, weight, reps }  ※time タイプは reps に秒数
-    settings: { restSec: 90, restAuto: true, sound: true },
+    sets: [],
+    deleted: { sets: {}, exercises: {} },
+    settings: { restSec: 90, restAuto: true, sound: true, u: 0 },
   };
 }
 
@@ -75,21 +84,28 @@ function normalize(raw) {
     defWeight: Math.max(0, num(e.defWeight)),
     defReps: Math.max(1, num(e.defReps, 10)),
     archived: !!e.archived,
+    u: num(e.u),
   }));
   const ids = new Set(exercises.map((e) => e.id));
   const sets = raw.sets
     .filter((s) => s && ids.has(String(s.exId)) && /^\d{4}-\d{2}-\d{2}$/.test(s.date))
     .map((s) => ({
       id: String(s.id || uid()), exId: String(s.exId), date: s.date, ts: num(s.ts, Date.now()),
-      weight: Math.max(0, num(s.weight)), reps: Math.max(0, num(s.reps)),
-    }));
+      weight: Math.max(0, num(s.weight)), reps: Math.max(0, num(s.reps)), u: num(s.u, num(s.ts)),
+    }))
+    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+  const tomb = (m) => Object.fromEntries(Object.entries(m && typeof m === 'object' ? m : {})
+    .map(([k, v]) => [k, num(v)]).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+  const del = raw.deleted || {};
   const st = raw.settings || {};
   return {
-    version: 1, exercises, sets,
+    version: 1, epoch: num(raw.epoch), exercises, sets,
+    deleted: { sets: tomb(del.sets), exercises: tomb(del.exercises) },
     settings: {
       restSec: Math.min(600, Math.max(10, num(st.restSec, 90))),
       restAuto: st.restAuto !== false,
       sound: st.sound !== false,
+      u: num(st.u),
     },
   };
 }
@@ -103,9 +119,22 @@ function load() {
 }
 
 let state = load();
-function save() {
+function save(fromSync) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   catch (_) { toast('保存に失敗しました（端末の空き容量を確認してください）'); }
+  if (!fromSync) scheduleSync(); // 変更があったら少し待ってから他の端末へ送る
+}
+
+// 削除は「消した」という印（deleted）を残す。そうしないと同期で他の端末から復活してしまう
+function removeSet(id) {
+  state.sets = state.sets.filter((x) => x.id !== id);
+  state.deleted.sets[id] = Date.now();
+}
+function removeExercise(id) {
+  for (const s of state.sets) if (s.exId === id) state.deleted.sets[s.id] = Date.now();
+  state.sets = state.sets.filter((s) => s.exId !== id);
+  state.exercises = state.exercises.filter((e) => e.id !== id);
+  state.deleted.exercises[id] = Date.now();
 }
 
 /* ───────────── 2. 計算 ───────────── */
@@ -276,6 +305,162 @@ function drawRest() {
   } else el.querySelector('.rest-time').textContent = time;
 }
 
+/* ───────────── 端末間の同期（GitHub Gist） ─────────────
+ * しくみ
+ *   ・自分の GitHub アカウントの「非公開 Gist」（小さなファイル置き場）に、記録データを1ファイルで置く
+ *   ・各端末は「Gist を読む → 手元のデータと混ぜる（マージ）→ 違いがあれば書き戻す」を行う
+ *   ・混ぜ方は記録1件ごと。両方の端末で別々に記録しても、どちらも残る
+ * トークン（合言葉）はこの端末の中にだけ保存し、バックアップや Gist には含めない。
+ */
+const SYNC_KEY = 'kintore-log.sync';
+const SYNC_FILE = 'kintore-log.json';
+const GH_API = 'https://api.github.com';
+
+function loadSyncCfg() {
+  try { const c = JSON.parse(localStorage.getItem(SYNC_KEY)); if (c && c.token) return c; } catch (_) { /* 未設定 */ }
+  return null;
+}
+let syncCfg = loadSyncCfg(); // { token, gistId, last }
+function saveSyncCfg() {
+  if (syncCfg) localStorage.setItem(SYNC_KEY, JSON.stringify(syncCfg));
+  else localStorage.removeItem(SYNC_KEY);
+}
+const sync = { busy: false, again: false, timer: null, error: '', status: 0 };
+
+// 2つのデータを混ぜる。a=この端末、b=保管場所。どちらの端末で実行しても同じ結果になるように作る
+function mergeData(a, b) {
+  // 「全削除」や「復元」をした側（epoch が新しい側）は、混ぜずに丸ごと優先
+  if (a.epoch !== b.epoch) return normalize(a.epoch > b.epoch ? a : b);
+  const newer = (m1, m2) => {
+    const out = { ...m1 };
+    for (const [k, v] of Object.entries(m2)) out[k] = Math.max(out[k] || 0, v);
+    return out;
+  };
+  const deleted = { sets: newer(a.deleted.sets, b.deleted.sets), exercises: newer(a.deleted.exercises, b.deleted.exercises) };
+  // id ごとに、更新時刻（u）が新しいほうを採用。並び順は保管場所の順を先に
+  const pick = (listB, listA, tomb) => {
+    const map = new Map();
+    for (const item of [...listB, ...listA]) {
+      const cur = map.get(item.id);
+      if (!cur || item.u > cur.u) map.set(item.id, item);
+    }
+    for (const id of Object.keys(tomb)) map.delete(id);
+    return map;
+  };
+  const exMap = pick(b.exercises, a.exercises, deleted.exercises);
+  // 別々の端末で同じ名前のメニューを作っていたら、1つにまとめる
+  const remap = {}, byName = new Map();
+  for (const e of [...exMap.values()]) {
+    const key = `${e.name}|${e.part}|${e.kind}`;
+    if (byName.has(key)) { remap[e.id] = byName.get(key); exMap.delete(e.id); } else byName.set(key, e.id);
+  }
+  const sets = [...pick(b.sets, a.sets, deleted.sets).values()].map((s) => (remap[s.exId] ? { ...s, exId: remap[s.exId] } : s));
+  return normalize({
+    epoch: a.epoch, exercises: [...exMap.values()], sets, deleted,
+    settings: a.settings.u >= b.settings.u ? a.settings : b.settings,
+  });
+}
+
+async function gh(method, path, body) {
+  const res = await fetch(GH_API + path, {
+    method, cache: 'no-store',
+    headers: {
+      Authorization: `Bearer ${syncCfg.token}`, Accept: 'application/vnd.github+json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) { const e = new Error(`HTTP ${res.status}`); e.status = res.status; throw e; }
+  return res.json();
+}
+
+// 保管場所のデータを読む。まだ無ければ null
+async function readRemote() {
+  if (!syncCfg.gistId) {
+    const list = await gh('GET', '/gists?per_page=100');
+    const hit = list.find((g) => g.files && g.files[SYNC_FILE]);
+    if (!hit) return null;
+    syncCfg.gistId = hit.id; saveSyncCfg();
+  }
+  let gist;
+  try { gist = await gh('GET', `/gists/${syncCfg.gistId}`); } catch (e) {
+    if (e.status !== 404) throw e;
+    syncCfg.gistId = null; saveSyncCfg(); // 保管場所が消されていた → 探し直す
+    return readRemote();
+  }
+  const f = gist.files[SYNC_FILE];
+  if (!f) return null;
+  const text = f.truncated ? await (await fetch(f.raw_url, { cache: 'no-store' })).text() : f.content;
+  try { return normalize(JSON.parse(text)); } catch (_) { return null; }
+}
+
+async function writeRemote(content) {
+  const files = { [SYNC_FILE]: { content } };
+  if (syncCfg.gistId) return gh('PATCH', `/gists/${syncCfg.gistId}`, { files });
+  const gist = await gh('POST', '/gists', { description: '筋トレログ 同期データ（アプリが自動で更新します）', public: false, files });
+  syncCfg.gistId = gist.id; saveSyncCfg();
+  return gist;
+}
+
+function syncStatusText() {
+  if (sync.busy) return '同期中…';
+  if (sync.error) return sync.error;
+  if (!syncCfg.last) return 'まだ同期していません';
+  const d = new Date(syncCfg.last);
+  const day = ymd(d) === today() ? '今日' : `${d.getMonth() + 1}/${d.getDate()}`;
+  return `最終同期: ${day} ${d.getHours()}:${pad2(d.getMinutes())}`;
+}
+function drawSyncStatus() {
+  const el = document.getElementById('sync-status');
+  if (el && syncCfg) { el.textContent = syncStatusText(); el.classList.toggle('err', !!sync.error && !sync.busy); }
+}
+
+async function syncNow(manual) {
+  if (!syncCfg) return;
+  if (sync.busy) { sync.again = true; return; }
+  clearTimeout(sync.timer);
+  sync.busy = true; drawSyncStatus();
+  try {
+    const before = JSON.stringify(state);
+    const remote = await readRemote();
+    const merged = remote ? mergeData(normalize(state), remote) : normalize(state);
+    const text = JSON.stringify(merged);
+    if (!remote || text !== JSON.stringify(remote)) await writeRemote(text);
+    if (JSON.stringify(state) !== before || document.getElementById('dlg').open) {
+      sync.again = true; // 通信中に記録された／編集画面が開いている → 画面は触らず、あとでもう一度
+    } else if (text !== JSON.stringify(normalize(state))) {
+      state = merged; save(true); render(); // 他の端末の変更を取り込む
+    }
+    syncCfg.last = Date.now(); saveSyncCfg();
+    sync.error = ''; sync.status = 200;
+    if (manual) toast('同期しました');
+  } catch (e) {
+    sync.status = e.status || 0;
+    sync.error = e.status === 401 ? 'トークンが無効です。作り直して設定し直してください'
+      : e.status === 403 || e.status === 404 ? 'トークンに Gist の権限がありません'
+        : e.status ? `同期に失敗しました（${e.status}）` : 'オフライン（つながったら自動で同期します）';
+    if (manual) toast(sync.error);
+  } finally {
+    sync.busy = false; drawSyncStatus();
+    if (sync.again) { sync.again = false; sync.timer = setTimeout(() => syncNow(), 4000); }
+  }
+}
+function scheduleSync() {
+  if (!syncCfg) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(() => syncNow(), 2500);
+}
+
+async function connectSync(token) {
+  token = token.trim();
+  if (!token) return toast('トークンを貼り付けてください');
+  syncCfg = { token, gistId: null, last: 0 };
+  render();
+  await syncNow(true);
+  if (sync.error && sync.status) { syncCfg = null; sync.error = ''; } // 認証エラーなら設定を取り消す（オフラインなら残す）
+  saveSyncCfg(); render();
+}
+
 /* ───────────── 4. 画面 ───────────── */
 
 const ui = {
@@ -292,6 +477,7 @@ const TABS = [['log', '記録'], ['history', '履歴'], ['stats', '分析'], ['m
 
 function render() {
   const y = window.scrollY;
+  if (ui.exId && !exById(ui.exId)) ui.exId = null; // 同期で消えたメニューを開いたままにしない
   setKids(document.getElementById('nav'),
     h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '' })),
     TABS.map(([id, label]) => h('button', {
@@ -323,7 +509,8 @@ function recordSet() {
   unlockAudio();
   const reps = Math.round(ui.reps), weight = ex.kind === 'weight' ? ui.weight : 0;
   if (!(reps > 0)) return toast(ex.kind === 'time' ? '秒数を入力してください' : '回数を入力してください');
-  const s = { id: uid(), exId: ex.id, date: ui.date, ts: Date.now(), weight, reps };
+  const now = Date.now();
+  const s = { id: uid(), exId: ex.id, date: ui.date, ts: now, weight, reps, u: now };
   const prior = setsOf(ex.id);
   const best = prior.length ? Math.max(...prior.map((p) => score(ex, p))) : null;
   state.sets.push(s);
@@ -398,7 +585,7 @@ function inputPanel() {
         h('span', { class: 'set-v' }, fmtSet(ex, s)),
         h('button', {
           type: 'button', class: 'icon-btn small', 'aria-label': `${i + 1}セット目を削除`,
-          onclick: () => { state.sets = state.sets.filter((x) => x.id !== s.id); save(); toast('削除しました'); render(); },
+          onclick: () => { removeSet(s.id); save(); toast('削除しました'); render(); },
         }, icon('close')))))));
 }
 
@@ -470,11 +657,11 @@ function editSetDialog(ex, s) {
   openDialog(`${ex.name} を編集`,
     [ex.kind === 'weight' && field('重量 (kg)', w, (v) => { w = v; }, true),
       field(ex.kind === 'time' ? '時間 (秒)' : '回数', r, (v) => { r = v; })],
-    [{ label: '削除', kind: 'danger', run: () => { state.sets = state.sets.filter((x) => x.id !== s.id); save(); render(); } },
+    [{ label: '削除', kind: 'danger', run: () => { removeSet(s.id); save(); render(); } },
       { label: 'キャンセル' },
       { label: '保存', kind: 'primary', run: () => {
         if (!(r > 0)) { toast('1以上の数を入力してください'); return false; }
-        s.weight = Math.max(0, w); s.reps = Math.round(r); save(); render();
+        s.weight = Math.max(0, w); s.reps = Math.round(r); s.u = Date.now(); save(); render();
       } }]);
 }
 
@@ -694,8 +881,7 @@ function exerciseDialog(ex) {
       setTimeout(() => confirmDialog(`「${ex.name}」を削除`,
         n ? `このメニューの記録 ${n}セット分も一緒に削除されます。元に戻せません。` : 'このメニューを削除します。',
         '削除する', () => {
-          state.exercises = state.exercises.filter((e) => e.id !== ex.id);
-          state.sets = state.sets.filter((s) => s.exId !== ex.id);
+          removeExercise(ex.id);
           save(); toast('削除しました'); render();
         }), 0);
     } },
@@ -704,8 +890,8 @@ function exerciseDialog(ex) {
       d.name = d.name.trim();
       if (!d.name) { toast('メニュー名を入力してください'); return false; }
       if (!(d.defReps > 0)) { toast('1以上の数を入力してください'); return false; }
-      if (isNew) state.exercises.push({ ...d, id: uid(), archived: false });
-      else Object.assign(ex, d);
+      if (isNew) state.exercises.push({ ...d, id: uid(), archived: false, u: Date.now() });
+      else Object.assign(ex, d, { u: Date.now() });
       save(); toast(isNew ? '追加しました' : '保存しました'); render();
     } },
   ].filter(Boolean));
@@ -735,16 +921,44 @@ function importJson(file) {
     if (!next) return toast('このファイルは読み込めませんでした');
     confirmDialog('バックアップから復元',
       `メニュー ${next.exercises.length}件・記録 ${next.sets.length}セットを読み込みます。いまのデータは置き換えられます。`,
-      '置き換える', () => { state = next; save(); toast('復元しました'); render(); });
+      '置き換える', () => { next.epoch = Date.now(); state = next; save(); toast('復元しました'); render(); });
   };
   reader.readAsText(file);
+}
+
+function syncCard() {
+  if (syncCfg) {
+    return h('section', { class: 'card list' },
+      h('div', { class: 'eyebrow' }, '端末間の同期'),
+      h('div', { class: 'row' },
+        h('span', {}, h('b', {}, 'GitHub と同期中'), h('small', { id: 'sync-status', class: sync.error ? 'err' : '' }, syncStatusText())),
+        h('button', { type: 'button', class: 'btn ghost', onclick: () => syncNow(true) }, '今すぐ同期')),
+      h('p', { class: 'hint' }, 'アプリを開いたときと記録したときに自動で同期します。もう一台でも同じトークンを設定してください。'),
+      h('div', { class: 'btn-col' },
+        h('button', {
+          type: 'button', class: 'btn danger-text',
+          onclick: () => confirmDialog('同期をやめる', 'この端末からトークンを消します。記録はこの端末にも GitHub にも残ります。', 'やめる',
+            () => { clearTimeout(sync.timer); syncCfg = null; sync.error = ''; saveSyncCfg(); render(); }),
+        }, 'この端末の同期をやめる')));
+  }
+  const input = h('input', { type: 'password', placeholder: 'ghp_… または github_pat_…', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, 'aria-label': 'GitHub トークン' });
+  return h('section', { class: 'card list' },
+    h('div', { class: 'eyebrow' }, '端末間の同期'),
+    h('p', { class: 'hint' }, 'iPhone と iPad で同じ記録を使えます。データは自分の GitHub アカウントの非公開 Gist に保管します。'),
+    h('ol', { class: 'steps' },
+      h('li', {}, h('a', { href: 'https://github.com/settings/tokens/new?scopes=gist&description=kintore-log', target: '_blank', rel: 'noopener' }, 'GitHub のトークン作成ページ'), 'を開く（gist だけにチェック）'),
+      h('li', {}, '「Generate token」で出てきた文字列をコピー'),
+      h('li', {}, '下に貼り付けて「同期を始める」。もう一台でも同じ文字列を貼る')),
+    h('label', { class: 'field' }, input),
+    h('div', { class: 'btn-col' },
+      h('button', { type: 'button', class: 'btn primary', onclick: () => connectSync(input.value) }, '同期を始める')));
 }
 
 function viewMenu() {
   const st = state.settings;
   const toggle = (label, sub, key) => h('label', { class: 'row' },
     h('span', {}, h('b', {}, label), sub && h('small', {}, sub)),
-    h('input', { type: 'checkbox', class: 'switch', checked: st[key], onchange: (e) => { st[key] = e.target.checked; save(); render(); } }));
+    h('input', { type: 'checkbox', class: 'switch', checked: st[key], onchange: (e) => { st[key] = e.target.checked; st.u = Date.now(); save(); render(); } }));
   const fileInput = h('input', { type: 'file', accept: 'application/json,.json', hidden: true, onchange: (e) => { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ''; } });
 
   return h('div', { class: 'two-col' },
@@ -763,7 +977,7 @@ function viewMenu() {
               h('small', {}, ex.kind === 'weight' ? `重量×回数・${ex.step}kg刻み` : KINDS[ex.kind])),
             h('input', {
               type: 'checkbox', class: 'switch', checked: !ex.archived, 'aria-label': `${ex.name}を記録画面に表示`,
-              onchange: (e) => { ex.archived = !e.target.checked; save(); render(); },
+              onchange: (e) => { ex.archived = !e.target.checked; ex.u = Date.now(); save(); render(); },
             }))));
       }),
       h('p', { class: 'hint pad' }, 'スイッチを切ると、記録は残したまま記録画面から隠せます')),
@@ -775,12 +989,13 @@ function viewMenu() {
         toggle('記録したら自動でスタート', 'セット間の休憩をカウントダウン', 'restAuto'),
         h('div', { class: 'row' }, h('span', {}, h('b', {}, '休憩時間')),
           h('div', { class: 'chips' }, [60, 90, 120, 180].map((s) => h('button', {
-            type: 'button', class: 'chip' + (st.restSec === s ? ' on' : ''), onclick: () => { st.restSec = s; save(); render(); },
+            type: 'button', class: 'chip' + (st.restSec === s ? ' on' : ''), onclick: () => { st.restSec = s; st.u = Date.now(); save(); render(); },
           }, s < 120 ? `${s}秒` : `${s / 60}分`)))),
         toggle('終了を音で知らせる', '消音モード中は鳴りません', 'sound')),
+      syncCard(),
       h('section', { class: 'card list' },
         h('div', { class: 'eyebrow' }, 'データ'),
-        h('p', { class: 'hint' }, '記録はこの端末の中だけに保存されます。機種変更や iPhone ⇄ iPad の引っ越しは、バックアップを書き出して読み込んでください。'),
+        h('p', { class: 'hint' }, '万一に備えて、ときどきバックアップを書き出しておくと安心です。'),
         h('div', { class: 'btn-col' },
           h('button', { type: 'button', class: 'btn', onclick: () => download(`kintore-log-${today()}.json`, JSON.stringify(state, null, 2), 'application/json') }, 'バックアップを書き出す'),
           h('button', { type: 'button', class: 'btn', onclick: () => fileInput.click() }, 'バックアップから復元'), fileInput,
@@ -788,7 +1003,7 @@ function viewMenu() {
           h('button', {
             type: 'button', class: 'btn danger-text',
             onclick: () => confirmDialog('すべてのデータを削除', 'メニューと記録をすべて消して、初期状態に戻します。元に戻せません。', '削除する',
-              () => { state = defaultState(); save(); toast('初期状態に戻しました'); render(); }),
+              () => { state = defaultState(); state.epoch = Date.now(); save(); toast('初期状態に戻しました'); render(); }),
           }, 'すべてのデータを削除')))));
 }
 
@@ -802,6 +1017,14 @@ document.addEventListener('visibilitychange', () => {
   if (today() !== lastDay) { if (ui.date === lastDay) ui.date = today(); lastDay = today(); render(); }
   if (rest.end) drawRest();
 });
+// 同期のタイミング: 起動時／アプリに戻ったとき／アプリを離れるとき（送り残しを出さない）／電波が戻ったとき
+document.addEventListener('visibilitychange', () => {
+  if (!syncCfg) return;
+  if (!document.hidden) syncNow();
+  else if (sync.timer) syncNow();
+});
+window.addEventListener('online', () => syncNow());
+if (syncCfg) syncNow();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

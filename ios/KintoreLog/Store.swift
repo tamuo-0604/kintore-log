@@ -13,6 +13,7 @@ struct Exercise: Codable, Identifiable, Hashable {
     var defWeight: Double
     var defReps: Double
     var archived: Bool
+    var u: Double? = nil  // 最終更新時刻（ミリ秒）。同期で「新しいほう」を選ぶのに使う
 }
 
 struct WorkoutSet: Codable, Identifiable, Hashable {
@@ -22,12 +23,20 @@ struct WorkoutSet: Codable, Identifiable, Hashable {
     var ts: Double        // 記録時刻（ミリ秒）
     var weight: Double
     var reps: Double      // time タイプのときは秒数
+    var u: Double? = nil
 }
 
 struct AppSettings: Codable, Hashable {
     var restSec: Double
     var restAuto: Bool
     var sound: Bool
+    var u: Double? = nil
+}
+
+/// 削除した記録・メニューの id と削除時刻。同期で他の端末からも消すための印
+struct Tombstones: Codable, Hashable {
+    var sets: [String: Double] = [:]
+    var exercises: [String: Double] = [:]
 }
 
 struct AppData: Codable {
@@ -35,6 +44,8 @@ struct AppData: Codable {
     var exercises: [Exercise]
     var sets: [WorkoutSet]
     var settings: AppSettings
+    var epoch: Double? = nil        // 「全削除」「復元」をした時刻
+    var deleted: Tombstones? = nil
 }
 
 struct BodyPart: Identifiable, Hashable {
@@ -144,32 +155,36 @@ final class Store: ObservableObject {
     }
 
     static func newID() -> String { UUID().uuidString.lowercased() }
+    static var nowMs: Double { Date().timeIntervalSince1970 * 1000 }
 
     static func defaultData() -> AppData {
-        func e(_ name: String, _ part: String, _ kind: String, _ w: Double, _ r: Double, _ step: Double = 2.5) -> Exercise {
-            Exercise(id: newID(), name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false)
+        // id は PWA 版と同じ固定値。どの端末でも「同じメニュー」として扱える
+        func e(_ key: String, _ name: String, _ part: String, _ kind: String, _ w: Double, _ r: Double, _ step: Double = 2.5) -> Exercise {
+            Exercise(id: "seed-" + key, name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false, u: 0)
         }
         return AppData(
             version: 1,
             exercises: [
-                e("ベンチプレス", "chest", "weight", 40, 10),
-                e("ダンベルプレス", "chest", "weight", 14, 10, 2),
-                e("腕立て伏せ", "chest", "body", 0, 15),
-                e("デッドリフト", "back", "weight", 60, 5),
-                e("ラットプルダウン", "back", "weight", 35, 10),
-                e("懸垂", "back", "body", 0, 8),
-                e("スクワット", "legs", "weight", 50, 8),
-                e("レッグプレス", "legs", "weight", 80, 10, 5),
-                e("ブルガリアンスクワット", "legs", "body", 0, 10),
-                e("ショルダープレス", "shoulders", "weight", 20, 10),
-                e("サイドレイズ", "shoulders", "weight", 5, 15, 1),
-                e("アームカール", "arms", "weight", 10, 12, 1),
-                e("トライセプスプレスダウン", "arms", "weight", 20, 12),
-                e("クランチ", "abs", "body", 0, 20),
-                e("プランク", "abs", "time", 0, 60),
+                e("bench-press", "ベンチプレス", "chest", "weight", 40, 10),
+                e("dumbbell-press", "ダンベルプレス", "chest", "weight", 14, 10, 2),
+                e("push-up", "腕立て伏せ", "chest", "body", 0, 15),
+                e("deadlift", "デッドリフト", "back", "weight", 60, 5),
+                e("lat-pulldown", "ラットプルダウン", "back", "weight", 35, 10),
+                e("pull-up", "懸垂", "back", "body", 0, 8),
+                e("squat", "スクワット", "legs", "weight", 50, 8),
+                e("leg-press", "レッグプレス", "legs", "weight", 80, 10, 5),
+                e("bulgarian-squat", "ブルガリアンスクワット", "legs", "body", 0, 10),
+                e("shoulder-press", "ショルダープレス", "shoulders", "weight", 20, 10),
+                e("side-raise", "サイドレイズ", "shoulders", "weight", 5, 15, 1),
+                e("arm-curl", "アームカール", "arms", "weight", 10, 12, 1),
+                e("triceps-pressdown", "トライセプスプレスダウン", "arms", "weight", 20, 12),
+                e("crunch", "クランチ", "abs", "body", 0, 20),
+                e("plank", "プランク", "abs", "time", 0, 60),
             ],
             sets: [],
-            settings: AppSettings(restSec: 90, restAuto: true, sound: true)
+            settings: AppSettings(restSec: 90, restAuto: true, sound: true, u: 0),
+            epoch: 0,
+            deleted: Tombstones()
         )
     }
 
@@ -239,9 +254,9 @@ final class Store: ObservableObject {
     @discardableResult
     func addSet(_ ex: Exercise, date: String, weight: Double, reps: Double) -> Bool {
         let previousBest = best(ex)
-        let s = WorkoutSet(id: Store.newID(), exId: ex.id, date: date,
-                           ts: Date().timeIntervalSince1970 * 1000,
-                           weight: ex.kind == "weight" ? weight : 0, reps: reps.rounded())
+        let now = Store.nowMs
+        let s = WorkoutSet(id: Store.newID(), exId: ex.id, date: date, ts: now,
+                           weight: ex.kind == "weight" ? weight : 0, reps: reps.rounded(), u: now)
         data.sets.append(s)
         if data.settings.restAuto && date == Day.today {
             restEnd = Date().addingTimeInterval(data.settings.restSec)
@@ -250,17 +265,34 @@ final class Store: ObservableObject {
         return false
     }
 
-    func deleteSet(_ id: String) { data.sets.removeAll { $0.id == id } }
+    func deleteSet(_ id: String) {
+        var d = data
+        d.sets.removeAll { $0.id == id }
+        var tomb = d.deleted ?? Tombstones()
+        tomb.sets[id] = Store.nowMs
+        d.deleted = tomb
+        data = d
+    }
 
     func saveExercise(_ ex: Exercise) {
-        if let i = data.exercises.firstIndex(where: { $0.id == ex.id }) { data.exercises[i] = ex }
-        else { data.exercises.append(ex) }
+        var e = ex
+        e.u = Store.nowMs
+        if let i = data.exercises.firstIndex(where: { $0.id == e.id }) { data.exercises[i] = e }
+        else { data.exercises.append(e) }
     }
 
     func deleteExercise(_ id: String) {
-        data.sets.removeAll { $0.exId == id }
-        data.exercises.removeAll { $0.id == id }
+        var d = data
+        var tomb = d.deleted ?? Tombstones()
+        for s in d.sets where s.exId == id { tomb.sets[s.id] = Store.nowMs }
+        tomb.exercises[id] = Store.nowMs
+        d.deleted = tomb
+        d.sets.removeAll { $0.exId == id }
+        d.exercises.removeAll { $0.id == id }
+        data = d
     }
+
+    func touchSettings() { data.settings.u = Store.nowMs }
 
     // MARK: バックアップ
 
@@ -273,7 +305,9 @@ final class Store: ObservableObject {
     /// PWA 版／ネイティブ版どちらのバックアップでも読み込める
     func importData(_ raw: Data) -> Bool {
         guard let decoded = try? JSONDecoder().decode(AppData.self, from: raw) else { return false }
-        data = decoded
+        var d = decoded
+        d.epoch = Store.nowMs // 復元は「丸ごと置き換え」として扱う（PWA 版と同じ）
+        data = d
         return true
     }
 }
