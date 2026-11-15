@@ -297,7 +297,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 @keyframes fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-/* ── iPad など広い画面：左にナビ、内容は2カラム ── */
+/* ── iPad など広い画面：ナビを左に置く ── */
 @media (min-width: 720px) {
   :root { --nav-h: 0px; }
   #nav {
@@ -312,29 +312,37 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
   #rest { left: calc(50% + 42px); bottom: 22px; }
   h1 { font-size: 32px; }
 
-  .log-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 24px; align-items: start; }
-  .sheet, body.sheet-open .sheet { display: block; position: sticky; top: calc(var(--safe-t) + 26px); inset: auto; background: none; z-index: 1; animation: none; }
-  body.sheet-open { overflow: auto; }
-  .panel { border-radius: 24px; padding: 22px; max-height: calc(100dvh - 60px); box-shadow: var(--shadow); animation: none; }
-  .sheet-close { display: none; }
+  /* 入力シートは画面下の中央に、ほどよい幅で出す（iPad 縦向きなど） */
+  .sheet { justify-content: center; }
+  .panel { max-width: 620px; }
   .chips.scroll { margin: 0 0 14px; padding: 2px 0; flex-wrap: wrap; }
 
-  .two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 24px; align-items: start; }
-  .col-side { position: sticky; top: calc(var(--safe-t) + 26px); }
-  .two-col .col-side > .card:first-child { margin-top: 78px; }
-  .two-col .col-side > .page-head + .card { margin-top: 0; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .grid-2 .card { margin-bottom: 14px; }
   .tiles.four { grid-template-columns: repeat(4, 1fr); }
   .cal { gap: 8px; }
   .cal-day { aspect-ratio: 1.25; }
 }
+/* ── 横幅に余裕があるとき（iPad 横向きなど）だけ 2 カラムにする。
+      iPad mini の縦向き（幅 744）で 2 カラムにすると左側がつぶれるため ── */
+@media (min-width: 980px) {
+  .log-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 24px; align-items: start; }
+  .sheet, body.sheet-open .sheet { display: block; position: sticky; top: calc(var(--safe-t) + 26px); inset: auto; background: none; z-index: 1; animation: none; }
+  body.sheet-open { overflow: auto; }
+  .panel { max-width: none; border-radius: 24px; padding: 22px; max-height: calc(100dvh - 60px); box-shadow: var(--shadow); animation: none; }
+  .sheet-close { display: none; }
+
+  .two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 24px; align-items: start; }
+  .col-side { position: sticky; top: calc(var(--safe-t) + 26px); }
+  .two-col .col-side > .card:first-child { margin-top: 78px; }
+  .two-col .col-side > .page-head + .card { margin-top: 0; }
+}
 @media (min-width: 1000px) {
   .ex-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 }
 
 /* スマホで入力シートを開いている間は、休憩タイマーを上に逃がして入力欄を隠さない */
-@media (max-width: 719px) {
+@media (max-width: 979px) {
   body.sheet-open #rest { bottom: auto; top: calc(var(--safe-t) + 92px); }
 }
 
