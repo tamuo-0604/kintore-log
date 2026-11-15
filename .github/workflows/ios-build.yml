@@ -1,0 +1,19 @@
+# ネイティブ版がビルドできるかを GitHub の Mac で自動チェックします（手元に Mac がなくても確認できる）
+name: iOS build
+on:
+  push:
+    paths: ['ios/**', '.github/workflows/ios-build.yml']
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen
+        working-directory: ios
+      - run: >
+          xcodebuild -project KintoreLog.xcodeproj -scheme KintoreLog
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build
+        working-directory: ios

@@ -1,0 +1,279 @@
+import Foundation
+import SwiftUI
+
+// データの形は PWA 版（web/app.js）と完全に同じ。
+// そのため PWA の「バックアップを書き出す」で作った JSON をそのまま読み込めます。
+
+struct Exercise: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String
+    var part: String      // chest / back / legs / shoulders / arms / abs / other
+    var kind: String      // weight=重量×回数 / body=回数のみ / time=秒数
+    var step: Double
+    var defWeight: Double
+    var defReps: Double
+    var archived: Bool
+}
+
+struct WorkoutSet: Codable, Identifiable, Hashable {
+    var id: String
+    var exId: String
+    var date: String      // "YYYY-MM-DD"
+    var ts: Double        // 記録時刻（ミリ秒）
+    var weight: Double
+    var reps: Double      // time タイプのときは秒数
+}
+
+struct AppSettings: Codable, Hashable {
+    var restSec: Double
+    var restAuto: Bool
+    var sound: Bool
+}
+
+struct AppData: Codable {
+    var version: Int
+    var exercises: [Exercise]
+    var sets: [WorkoutSet]
+    var settings: AppSettings
+}
+
+struct BodyPart: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let color: Color
+}
+
+let bodyParts: [BodyPart] = [
+    BodyPart(id: "chest", name: "胸", color: Color(red: 0.22, green: 0.53, blue: 0.90)),
+    BodyPart(id: "back", name: "背中", color: Color(red: 0.85, green: 0.35, blue: 0.15)),
+    BodyPart(id: "legs", name: "脚", color: Color(red: 0.10, green: 0.62, blue: 0.44)),
+    BodyPart(id: "shoulders", name: "肩", color: Color(red: 0.79, green: 0.52, blue: 0.0)),
+    BodyPart(id: "arms", name: "腕", color: Color(red: 0.84, green: 0.32, blue: 0.51)),
+    BodyPart(id: "abs", name: "腹", color: Color(red: 0.05, green: 0.64, blue: 0.05)),
+    BodyPart(id: "other", name: "その他", color: Color(red: 0.56, green: 0.52, blue: 0.91)),
+]
+
+func bodyPart(_ id: String) -> BodyPart {
+    bodyParts.first(where: { $0.id == id }) ?? bodyParts[bodyParts.count - 1]
+}
+
+struct RecordKind: Identifiable, Hashable {
+    let id: String
+    let name: String
+}
+
+let kindNames: [RecordKind] = [
+    RecordKind(id: "weight", name: "重量 × 回数"),
+    RecordKind(id: "body", name: "回数のみ（自重）"),
+    RecordKind(id: "time", name: "時間（秒）"),
+]
+
+// MARK: - 日付の小道具
+
+enum Day {
+    static let calendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.firstWeekday = 2 // 月曜はじまり
+        return c
+    }()
+
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static let labelFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M月d日（E）"
+        return f
+    }()
+
+    static func string(_ date: Date) -> String { formatter.string(from: date) }
+    static func date(_ s: String) -> Date { formatter.date(from: s) ?? Date() }
+    static var today: String { string(Date()) }
+    static func label(_ s: String) -> String { labelFormatter.string(from: date(s)) }
+
+    static func short(_ s: String) -> String {
+        let c = calendar.dateComponents([.month, .day], from: date(s))
+        return "\(c.month ?? 0)/\(c.day ?? 0)"
+    }
+
+    static func add(_ s: String, _ days: Int) -> String {
+        string(calendar.date(byAdding: .day, value: days, to: date(s)) ?? date(s))
+    }
+
+    /// その日を含む週の月曜日
+    static func weekStart(_ s: String) -> String {
+        let weekday = calendar.component(.weekday, from: date(s)) // 日=1 … 土=7
+        return add(s, -((weekday + 5) % 7))
+    }
+}
+
+func formatNumber(_ v: Double) -> String {
+    let r = (v * 10).rounded() / 10
+    return r == r.rounded() ? String(Int(r)) : String(r)
+}
+
+// MARK: - Store（データの置き場所）
+
+final class Store: ObservableObject {
+    @Published var data: AppData { didSet { save() } }
+    @Published var restEnd: Date?   // 休憩タイマーの終了時刻
+
+    private let fileURL: URL
+
+    init() {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        fileURL = dir.appendingPathComponent("kintore-log.json")
+        if let raw = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode(AppData.self, from: raw) {
+            data = decoded
+        } else {
+            data = Store.defaultData()
+        }
+    }
+
+    private func save() {
+        if let raw = try? JSONEncoder().encode(data) {
+            try? raw.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    static func newID() -> String { UUID().uuidString.lowercased() }
+
+    static func defaultData() -> AppData {
+        func e(_ name: String, _ part: String, _ kind: String, _ w: Double, _ r: Double, _ step: Double = 2.5) -> Exercise {
+            Exercise(id: newID(), name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false)
+        }
+        return AppData(
+            version: 1,
+            exercises: [
+                e("ベンチプレス", "chest", "weight", 40, 10),
+                e("ダンベルプレス", "chest", "weight", 14, 10, 2),
+                e("腕立て伏せ", "chest", "body", 0, 15),
+                e("デッドリフト", "back", "weight", 60, 5),
+                e("ラットプルダウン", "back", "weight", 35, 10),
+                e("懸垂", "back", "body", 0, 8),
+                e("スクワット", "legs", "weight", 50, 8),
+                e("レッグプレス", "legs", "weight", 80, 10, 5),
+                e("ブルガリアンスクワット", "legs", "body", 0, 10),
+                e("ショルダープレス", "shoulders", "weight", 20, 10),
+                e("サイドレイズ", "shoulders", "weight", 5, 15, 1),
+                e("アームカール", "arms", "weight", 10, 12, 1),
+                e("トライセプスプレスダウン", "arms", "weight", 20, 12),
+                e("クランチ", "abs", "body", 0, 20),
+                e("プランク", "abs", "time", 0, 60),
+            ],
+            sets: [],
+            settings: AppSettings(restSec: 90, restAuto: true, sound: true)
+        )
+    }
+
+    // MARK: 参照
+
+    func exercise(_ id: String) -> Exercise? { data.exercises.first(where: { $0.id == id }) }
+
+    func sets(of exId: String) -> [WorkoutSet] {
+        data.sets.filter { $0.exId == exId }.sorted { $0.ts < $1.ts }
+    }
+
+    func sets(on date: String) -> [WorkoutSet] {
+        data.sets.filter { $0.date == date }.sorted { $0.ts < $1.ts }
+    }
+
+    /// 指定日より前で、いちばん最近その種目をやった日のセット
+    func lastSession(_ exId: String, before date: String) -> (date: String, sets: [WorkoutSet])? {
+        let prev = sets(of: exId).filter { $0.date < date }
+        guard let last = prev.last else { return nil }
+        return (last.date, prev.filter { $0.date == last.date })
+    }
+
+    /// 強さの指標。重量種目は推定1RM（Epley式）、それ以外は回数／秒数
+    func score(_ ex: Exercise, _ s: WorkoutSet) -> Double {
+        guard ex.kind == "weight" else { return s.reps }
+        return s.reps <= 1 ? s.weight : s.weight * (1 + s.reps / 30)
+    }
+
+    func scoreLabel(_ ex: Exercise) -> String {
+        ex.kind == "weight" ? "推定1RM" : (ex.kind == "time" ? "最長時間" : "最高回数")
+    }
+
+    func unit(_ ex: Exercise) -> String {
+        ex.kind == "weight" ? "kg" : (ex.kind == "time" ? "秒" : "回")
+    }
+
+    func volume(_ s: WorkoutSet) -> Double {
+        guard let ex = exercise(s.exId), ex.kind == "weight" else { return 0 }
+        return s.weight * s.reps
+    }
+
+    func text(_ ex: Exercise, _ s: WorkoutSet) -> String {
+        switch ex.kind {
+        case "weight": return "\(formatNumber(s.weight))kg × \(Int(s.reps))"
+        case "time": return "\(Int(s.reps))秒"
+        default: return "\(Int(s.reps))回"
+        }
+    }
+
+    func best(_ ex: Exercise) -> Double? {
+        sets(of: ex.id).map { score(ex, $0) }.max()
+    }
+
+    /// 週に1回以上トレーニングした週が何週続いているか
+    var weekStreak: Int {
+        let weeks = Set(data.sets.map { Day.weekStart($0.date) })
+        var w = Day.weekStart(Day.today)
+        if !weeks.contains(w) { w = Day.add(w, -7) }
+        var n = 0
+        while weeks.contains(w) { n += 1; w = Day.add(w, -7) }
+        return n
+    }
+
+    // MARK: 変更
+
+    /// セットを記録する。自己ベスト更新なら true を返す
+    @discardableResult
+    func addSet(_ ex: Exercise, date: String, weight: Double, reps: Double) -> Bool {
+        let previousBest = best(ex)
+        let s = WorkoutSet(id: Store.newID(), exId: ex.id, date: date,
+                           ts: Date().timeIntervalSince1970 * 1000,
+                           weight: ex.kind == "weight" ? weight : 0, reps: reps.rounded())
+        data.sets.append(s)
+        if data.settings.restAuto && date == Day.today {
+            restEnd = Date().addingTimeInterval(data.settings.restSec)
+        }
+        if let b = previousBest { return score(ex, s) > b + 1e-9 }
+        return false
+    }
+
+    func deleteSet(_ id: String) { data.sets.removeAll { $0.id == id } }
+
+    func saveExercise(_ ex: Exercise) {
+        if let i = data.exercises.firstIndex(where: { $0.id == ex.id }) { data.exercises[i] = ex }
+        else { data.exercises.append(ex) }
+    }
+
+    func deleteExercise(_ id: String) {
+        data.sets.removeAll { $0.exId == id }
+        data.exercises.removeAll { $0.id == id }
+    }
+
+    // MARK: バックアップ
+
+    func exportData() -> Data {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted]
+        return (try? enc.encode(data)) ?? Data()
+    }
+
+    /// PWA 版／ネイティブ版どちらのバックアップでも読み込める
+    func importData(_ raw: Data) -> Bool {
+        guard let decoded = try? JSONDecoder().decode(AppData.self, from: raw) else { return false }
+        data = decoded
+        return true
+    }
+}
