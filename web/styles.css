@@ -165,13 +165,14 @@ small { font-size: 12px; color: var(--text-2); font-weight: 400; }
 
 /* 入力パネル：スマホでは下からせり上がるシート、iPad では右側に常時表示 */
 .sheet { position: fixed; inset: 0; z-index: 30; display: none; align-items: flex-end; background: rgba(0, 0, 0, .5); }
-body.sheet-open .sheet { display: flex; animation: fade .18s ease-out; }
+body.sheet-open .sheet { display: flex; }
+body.sheet-anim .sheet { animation: fade .18s ease-out; }
 body.sheet-open { overflow: hidden; }
 .panel {
   width: 100%; max-height: 92dvh; overflow-y: auto; background: var(--surface);
   border-radius: 26px 26px 0 0; padding: 20px 18px calc(var(--safe-b) + 20px);
-  animation: rise .26s cubic-bezier(.2, .9, .3, 1);
 }
+body.sheet-anim .panel { animation: rise .26s cubic-bezier(.2, .9, .3, 1); }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .panel-head h2 { font-size: 24px; font-weight: 800; }
 .refs { display: grid; gap: 6px; background: var(--surface-2); border-radius: 14px; padding: 12px 14px; margin-bottom: 6px; }
@@ -346,10 +347,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 /* ── HIIT ── */
 .btn.wide { width: 100%; margin-top: 8px; min-height: 44px; }
 .calc { text-align: center; font-size: 13px; font-weight: 700; color: var(--text-2); margin: 4px 0 12px; font-variant-numeric: tabular-nums; }
-.panel.k-hiit .stepper { margin: 10px 0; }
-.panel.k-hiit .stepper-value input { font-size: 38px; }
-.panel.k-hiit .round { width: 48px; height: 48px; font-size: 24px; }
-.panel.k-hiit .stepper-row { margin-bottom: 6px; }
 .field-row .field > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 #hiit {
@@ -382,3 +379,12 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .hiit-title { font-size: 30px; font-weight: 800; }
 .hiit-sum { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 8px; letter-spacing: -.02em; }
 .hiit-sub { font-size: 14px; color: var(--text-2); font-weight: 600; margin-top: 4px; }
+
+/* HIIT の設定（2×2） */
+.hiit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 10px; }
+.hiit-grid .stepper { margin: 0; background: var(--surface-2); border-radius: 16px; padding: 10px 6px 8px; min-width: 0; }
+.hiit-grid .stepper-row { gap: 2px; margin: 2px 0 0; }
+.hiit-grid .round { width: 42px; height: 42px; font-size: 22px; background: var(--surface); }
+.hiit-grid .stepper-value { gap: 2px; }
+.hiit-grid .stepper-value input { font-size: 32px; }
+.hiit-grid .stepper-value span { font-size: 13px; width: 1.2em; }

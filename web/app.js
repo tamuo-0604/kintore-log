@@ -13,6 +13,8 @@
 /* ───────────── 1. データ ───────────── */
 
 const STORE_KEY = 'kintore-log.v1';
+// 公開のたびに自動で書き換わる目印（.github/workflows/pages.yml）。手元で動かしているときはそのまま
+const APP_BUILD = '__BUILD__';
 
 // 部位。color は styles.css の --p-◯◯ と対応
 const PARTS = [
@@ -676,7 +678,10 @@ function render() {
     }, icon(id), h('span', {}, label))));
   const view = { log: viewLog, history: viewHistory, stats: viewStats, menu: viewMenu }[ui.tab]();
   document.getElementById('view').replaceChildren(view);
-  document.body.classList.toggle('sheet-open', ui.tab === 'log' && !!ui.exId);
+  const open = ui.tab === 'log' && !!ui.exId;
+  // せり上がるアニメーションは「開いた瞬間」だけ。＋−を押すたびに動くとちらつくため
+  document.body.classList.toggle('sheet-anim', open && !document.body.classList.contains('sheet-open'));
+  document.body.classList.toggle('sheet-open', open);
   window.scrollTo(0, y);
 }
 
@@ -766,10 +771,12 @@ function inputPanel() {
 
     ex.kind === 'weight' && stepper('重量', 'kg', () => ui.weight, ex.step, 0, (v) => { ui.weight = v; }),
     ex.kind === 'hiit' && [
-      stepper('本数（セット数）', '本', () => ui.reps, 1, 1, (v) => { ui.reps = v; }, [6, 8, 10, 12]),
-      stepper('高強度', '秒', () => ui.weight, 5, 5, (v) => { ui.weight = v; }, [20, 30, 40, 45, 60]),
-      stepper('インターバル（休憩）', '秒', () => ui.interval, 5, 0, (v) => { ui.interval = v; }, [10, 15, 20, 30, 60]),
-      stepper('開始前の準備', '秒', () => ui.prep, 5, 0, (v) => { ui.prep = v; }, [0, 5, 10, 15, 30]),
+      // 4つの設定をひと目で見られるよう 2×2 に並べる
+      h('div', { class: 'hiit-grid' },
+        stepper('本数', '本', () => ui.reps, 1, 1, (v) => { ui.reps = v; }),
+        stepper('高強度', '秒', () => ui.weight, 5, 5, (v) => { ui.weight = v; }),
+        stepper('インターバル', '秒', () => ui.interval, 5, 0, (v) => { ui.interval = v; }),
+        stepper('開始前の準備', '秒', () => ui.prep, 5, 0, (v) => { ui.prep = v; })),
       h('p', { class: 'calc' }, `合計 ${fmtDur(ui.prep + hiitTotal(ui.reps, ui.weight, ui.interval))}（準備 ${ui.prep}秒＋高強度 ${fmtDur(ui.reps * ui.weight)}＋休憩 ${fmtDur(Math.max(0, ui.reps - 1) * ui.interval)}）`),
     ],
     ex.kind === 'cardio' && [
@@ -1203,6 +1210,20 @@ function syncCard() {
       h('button', { type: 'button', class: 'btn primary', onclick: () => connectSync(input.value) }, '同期を始める')));
 }
 
+// 保存してある古いアプリ本体を捨てて、最新版を読み込み直す。記録データ（localStorage）には触れない
+async function updateApp() {
+  toast('最新版を読み込んでいます…');
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches) await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
+    await Promise.all(['./', 'index.html', 'app.js', 'styles.css', 'sw.js'].map((u) => fetch(u, { cache: 'reload' })));
+  } catch (_) { /* オフラインなどで失敗しても、そのまま読み込み直す */ }
+  location.reload();
+}
+
 function viewMenu() {
   const st = state.settings;
   const toggle = (label, sub, key) => h('label', { class: 'row' },
@@ -1254,7 +1275,13 @@ function viewMenu() {
             type: 'button', class: 'btn danger-text',
             onclick: () => confirmDialog('すべてのデータを削除', 'メニューと記録をすべて消して、初期状態に戻します。元に戻せません。', '削除する',
               () => { state = defaultState(); state.epoch = Date.now(); save(); toast('初期状態に戻しました'); render(); }),
-          }, 'すべてのデータを削除')))));
+          }, 'すべてのデータを削除'))),
+      h('section', { class: 'card list' },
+        h('div', { class: 'eyebrow' }, 'アプリ'),
+        h('div', { class: 'row' },
+          h('span', {}, h('b', {}, 'バージョン'), h('small', {}, APP_BUILD.startsWith('__') ? '開発版' : APP_BUILD)),
+          h('button', { type: 'button', class: 'btn ghost', onclick: updateApp }, '最新版に更新')),
+        h('p', { class: 'hint' }, '新しい機能が出てこないときに押してください。記録は消えません。'))));
 }
 
 /* ───────────── 起動 ───────────── */

@@ -21,6 +21,11 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # 公開のたびに目印を書き込む。アプリの「バージョン」表示と、古い保存データの入れ替えに使う
+      - name: Stamp build
+        run: |
+          BUILD="$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M') (${GITHUB_SHA::7})"
+          sed -i "s/__BUILD__/${BUILD}/g" web/app.js web/sw.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
