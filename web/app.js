@@ -35,14 +35,14 @@ const KINDS = {
   weight: '重量 × 回数', body: '回数のみ（自重）', time: '時間（秒）',
   hiit: 'HIIT（タイマー）', cardio: '距離 × 時間（ランニングなど）',
 };
-const DATA_VERSION = 2; // データの形の版。2 で HIIT・有酸素を追加
+const DATA_VERSION = 3; // データの形の版。2 で HIIT・有酸素、3 で HIIT の開始前の準備時間を追加
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 // 最初から入っているメニュー。id を固定しているので、どの端末でも「同じメニュー」として同期できる
 function seedExercises() {
   const E = (key, name, part, kind, weight, reps, step = 2.5) =>
-    ({ id: 'seed-' + key, name, part, kind, step, defWeight: weight, defReps: reps, archived: false, rest: 10, u: 0 });
+    ({ id: 'seed-' + key, name, part, kind, step, defWeight: weight, defReps: reps, archived: false, rest: 10, prep: 10, u: 0 });
   return [
     E('bench-press', 'ベンチプレス', 'chest', 'weight', 40, 10),
     E('dumbbell-press', 'ダンベルプレス', 'chest', 'weight', 14, 10, 2),
@@ -103,6 +103,7 @@ function normalize(raw) {
     defReps: Math.max(1, num(e.defReps, 10)),
     archived: !!e.archived,
     rest: Math.max(0, num(e.rest, 10)), // HIIT のインターバル秒数
+    prep: Math.min(600, Math.max(0, num(e.prep, 10))), // HIIT の開始前の準備秒数
     u: num(e.u),
   }));
   // 古い版のデータには、あとから追加した初期メニュー（HIIT・有酸素）を足す。自分で消したものは足さない
@@ -364,17 +365,18 @@ async function keepAwake() { // タイマー中は画面が消えないように
 function startHiit() {
   const ex = exById(ui.exId);
   if (!ex) return;
-  const rounds = Math.round(ui.reps), work = Math.round(ui.weight), restSec = Math.round(ui.interval || 0);
+  const rounds = Math.round(ui.reps), work = Math.round(ui.weight), restSec = Math.round(ui.interval || 0), prep = Math.max(0, Math.round(ui.prep || 0));
   if (!(rounds > 0 && work > 0)) return toast('本数と高強度の秒数を入力してください');
   unlockAudio(); stopRest();
   Object.assign(hiit, {
     on: true, exId: ex.id, name: ex.name, date: ui.date, rounds, work, rest: restSec,
-    phase: 'ready', dur: 5, end: Date.now() + 5000, done: 0, paused: false, left: 0, lastSec: -1, startedAt: Date.now(),
+    phase: 'ready', dur: prep, end: Date.now() + prep * 1000, done: 0, paused: false, left: 0, lastSec: -1, startedAt: Date.now(),
   });
   keepAwake();
   buildHiit();
   clearInterval(hiit.tick);
   hiit.tick = setInterval(tickHiit, 100);
+  tickHiit(); // 準備 0 秒ならすぐ 1 本目に入る
 }
 
 function setPhase(phase, dur, from) { hiit.phase = phase; hiit.dur = dur; hiit.end = from + dur * 1000; hiit.lastSec = -1; }
@@ -652,6 +654,7 @@ const ui = {
   tab: 'log',
   date: today(),      // 記録対象の日（通常は今日）
   interval: 10,       // HIIT のインターバル秒数（入力中）
+  prep: 10,           // HIIT の開始前の準備秒数（入力中）
   part: 'all',        // 記録タブの部位フィルタ
   exId: null,         // 入力中の種目
   weight: 0, reps: 0, // 入力中の値
@@ -688,7 +691,7 @@ function selectExercise(ex) {
   ui.weight = base ? base.weight : ex.defWeight;
   ui.reps = base ? base.reps : ex.defReps;
   if (ex.kind === 'hiit') { // HIIT は毎回メニューで決めた内容から始める
-    ui.weight = ex.defWeight; ui.reps = ex.defReps; ui.interval = ex.rest;
+    ui.weight = ex.defWeight; ui.reps = ex.defReps; ui.interval = ex.rest; ui.prep = ex.prep;
   }
 }
 
@@ -766,7 +769,8 @@ function inputPanel() {
       stepper('本数（セット数）', '本', () => ui.reps, 1, 1, (v) => { ui.reps = v; }, [6, 8, 10, 12]),
       stepper('高強度', '秒', () => ui.weight, 5, 5, (v) => { ui.weight = v; }, [20, 30, 40, 45, 60]),
       stepper('インターバル（休憩）', '秒', () => ui.interval, 5, 0, (v) => { ui.interval = v; }, [10, 15, 20, 30, 60]),
-      h('p', { class: 'calc' }, `合計 ${fmtDur(hiitTotal(ui.reps, ui.weight, ui.interval))}（高強度 ${fmtDur(ui.reps * ui.weight)}）`),
+      stepper('開始前の準備', '秒', () => ui.prep, 5, 0, (v) => { ui.prep = v; }, [0, 5, 10, 15, 30]),
+      h('p', { class: 'calc' }, `合計 ${fmtDur(ui.prep + hiitTotal(ui.reps, ui.weight, ui.interval))}（準備 ${ui.prep}秒＋高強度 ${fmtDur(ui.reps * ui.weight)}＋休憩 ${fmtDur(Math.max(0, ui.reps - 1) * ui.interval)}）`),
     ],
     ex.kind === 'cardio' && [
       stepper('距離', 'km', () => ui.weight, ex.step, 0, (v) => { ui.weight = v; }),
@@ -1063,7 +1067,7 @@ function viewStats() {
 
 function exerciseDialog(ex) {
   const isNew = !ex;
-  const d = ex ? { ...ex } : { name: '', part: 'chest', kind: 'weight', step: 2.5, defWeight: 20, defReps: 10, rest: 10 };
+  const d = ex ? { ...ex } : { name: '', part: 'chest', kind: 'weight', step: 2.5, defWeight: 20, defReps: 10, rest: 10, prep: 10 };
   const numField = (label, val, set, dec) => h('label', { class: 'field' }, h('span', {}, label),
     h('input', { type: 'number', inputMode: dec ? 'decimal' : 'numeric', step: 'any', min: '0', value: String(val), oninput: (e) => set(parseFloat(e.target.value) || 0) }));
   // 記録のしかたを変えたら、その方式に合う初期値に入れ替える
@@ -1101,9 +1105,11 @@ function exerciseDialog(ex) {
     d.kind === 'hiit' && [
       h('div', { class: 'field-row' },
         numField('本数', d.defReps, (v) => { d.defReps = Math.round(v); }),
-        numField('高強度 (秒)', d.defWeight, (v) => { d.defWeight = Math.round(v); }),
-        numField('インターバル (秒)', d.rest, (v) => { d.rest = Math.round(v); })),
-      h('p', { class: 'hint' }, '例: タバタ式は 8本・高強度20秒・インターバル10秒。実施するときにも調整できます。')],
+        numField('高強度 (秒)', d.defWeight, (v) => { d.defWeight = Math.round(v); })),
+      h('div', { class: 'field-row' },
+        numField('インターバル (秒)', d.rest, (v) => { d.rest = Math.round(v); }),
+        numField('開始前の準備 (秒)', d.prep, (v) => { d.prep = Math.round(v); })),
+      h('p', { class: 'hint' }, '例: タバタ式は 8本・高強度20秒・インターバル10秒。開始前の準備は、スタートを押してから1本目が始まるまでの時間です。実施するときにも調整できます。')],
     d.kind === 'cardio' && [
       h('div', { class: 'field-row' },
         numField('最初の距離 (km)', d.defWeight, (v) => { d.defWeight = v; }, true),

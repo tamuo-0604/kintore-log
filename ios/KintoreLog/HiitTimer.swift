@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
-// HIIT タイマー。準備(5秒) →［高強度 → インターバル］× 本数 → 完了。
+// HIIT タイマー。準備(秒数は設定可) →［高強度 → インターバル］× 本数 → 完了。
 // 「この時刻に終わる」という終了時刻で管理するので、アプリを離れて戻ってもずれない。
 
 /// 合図の音を鳴らす係。音声ファイルを持たず、その場で「ピッ」という音を作る。
@@ -51,25 +51,30 @@ final class HiitTimer: ObservableObject {
     let rounds: Int
     let work: Int
     let rest: Int
+    let prep: Int   // 開始前の準備秒数（0 ならすぐ 1 本目）
 
     @Published var phase: Phase = .ready
     @Published var done = 0            // やり終えた高強度の本数
     @Published var paused = false
-    @Published var secondsLeft = 5
+    @Published var secondsLeft = 0
     @Published var progress = 0.0      // いまの段階の進み具合（0〜1）
     private(set) var elapsed = 0       // 開始から完了までの秒数
 
-    private var end = Date().addingTimeInterval(5)
-    private var duration = 5.0
+    private var end = Date()
+    private var duration = 1.0
     private var pausedLeft = 0.0
     private var lastSecond = -1
     private let startedAt = Date()
     private let tone = TonePlayer()
 
-    init(rounds: Int, work: Int, rest: Int) {
+    init(rounds: Int, work: Int, rest: Int, prep: Int) {
         self.rounds = max(1, rounds)
         self.work = max(1, work)
         self.rest = max(0, rest)
+        self.prep = max(0, prep)
+        secondsLeft = self.prep
+        duration = Double(max(1, self.prep))
+        end = Date().addingTimeInterval(Double(self.prep))
         tone.activate()
     }
 
@@ -183,10 +188,10 @@ struct HiitTimerView: View {
     @StateObject private var timer: HiitTimer
     private let ticker = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
 
-    init(name: String, rounds: Int, work: Int, rest: Int, onClose: @escaping (Int?) -> Void) {
+    init(name: String, rounds: Int, work: Int, rest: Int, prep: Int, onClose: @escaping (Int?) -> Void) {
         self.name = name
         self.onClose = onClose
-        _timer = StateObject(wrappedValue: HiitTimer(rounds: rounds, work: work, rest: rest))
+        _timer = StateObject(wrappedValue: HiitTimer(rounds: rounds, work: work, rest: rest, prep: prep))
     }
 
     private var background: Color {

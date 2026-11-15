@@ -15,6 +15,7 @@ struct Exercise: Codable, Identifiable, Hashable {
     var archived: Bool
     var u: Double? = nil  // 最終更新時刻（ミリ秒）。同期で「新しいほう」を選ぶのに使う
     var rest: Double? = nil // HIIT のインターバル秒数
+    var prep: Double? = nil // HIIT の開始前の準備秒数
 }
 
 struct WorkoutSet: Codable, Identifiable, Hashable {
@@ -168,7 +169,7 @@ final class Store: ObservableObject {
     static func defaultData() -> AppData {
         // id は PWA 版と同じ固定値。どの端末でも「同じメニュー」として扱える
         func e(_ key: String, _ name: String, _ part: String, _ kind: String, _ w: Double, _ r: Double, _ step: Double = 2.5) -> Exercise {
-            Exercise(id: "seed-" + key, name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false, u: 0, rest: 10)
+            Exercise(id: "seed-" + key, name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false, u: 0, rest: 10, prep: 10)
         }
         var hiit3030 = e("hiit-30-30", "HIIT 30-30", "hiit", "hiit", 30, 10)
         hiit3030.rest = 30

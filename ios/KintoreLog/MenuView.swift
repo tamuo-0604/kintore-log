@@ -117,6 +117,7 @@ struct ExerciseEditor: View {
                         numberRow("本数", $draft.defReps)
                         numberRow("高強度 (秒)", $draft.defWeight)
                         numberRow("インターバル (秒)", Binding(get: { draft.rest ?? 10 }, set: { draft.rest = $0 }))
+                        numberRow("開始前の準備 (秒)", Binding(get: { draft.prep ?? 10 }, set: { draft.prep = $0 }))
                     } else if draft.kind == "cardio" {
                         numberRow("距離 (km)", $draft.defWeight)
                         numberRow("時間 (分)", Binding(get: { (draft.defReps / 6).rounded() / 10 }, set: { draft.defReps = ($0 * 60).rounded() }))

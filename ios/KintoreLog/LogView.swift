@@ -123,6 +123,7 @@ struct SetInputView: View {
     @State private var recordCount = 0
     @State private var message: String?
     @State private var interval: Double = 10   // HIIT のインターバル秒数
+    @State private var prep: Double = 10       // HIIT の開始前の準備秒数
     @State private var showTimer = false
 
     var body: some View {
@@ -168,6 +169,7 @@ struct SetInputView: View {
                     NumberStepper(label: "本数（セット数）", unit: "本", value: $reps, step: 1, quick: [6, 8, 10, 12])
                     NumberStepper(label: "高強度", unit: "秒", value: $weight, step: 5, quick: [20, 30, 40, 45, 60])
                     NumberStepper(label: "インターバル（休憩）", unit: "秒", value: $interval, step: 5, quick: [10, 15, 20, 30, 60])
+                    NumberStepper(label: "開始前の準備", unit: "秒", value: $prep, step: 5, quick: [0, 5, 10, 15, 30])
                 } else if ex.kind == "cardio" {
                     NumberStepper(label: "距離", unit: "km", value: $weight, step: ex.step)
                     NumberStepper(label: "時間", unit: "分", value: Binding(get: { (reps / 6).rounded() / 10 }, set: { reps = $0 * 60 }),
@@ -244,7 +246,7 @@ struct SetInputView: View {
             .padding(.bottom, 80)
         }
         .fullScreenCover(isPresented: $showTimer) {
-            HiitTimerView(name: ex.name, rounds: Int(reps), work: Int(weight), rest: Int(interval)) { doneRounds in
+            HiitTimerView(name: ex.name, rounds: Int(reps), work: Int(weight), rest: Int(interval), prep: Int(prep)) { doneRounds in
                 if let n = doneRounds, n > 0 {
                     store.addSet(ex, date: date, weight: weight.rounded(), reps: Double(n))
                     recordCount += 1
@@ -260,6 +262,7 @@ struct SetInputView: View {
             weight = base?.weight ?? ex.defWeight
             reps = base?.reps ?? ex.defReps
             interval = ex.rest ?? 10
+            prep = ex.prep ?? 10
         }
     }
 
