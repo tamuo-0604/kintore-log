@@ -625,7 +625,7 @@ async function syncNow(manual) {
   } catch (e) {
     sync.status = e.status || 0;
     sync.error = e.old ? 'アプリが古いため同期を止めています。アプリを閉じて開き直してください'
-      : e.status === 401 ? 'トークンが無効です。作り直して設定し直してください'
+      : e.status === 401 ? 'GitHub がこのトークンを受け付けませんでした。文字列を最後までコピーできているか確認するか、作り直してください'
       : e.status === 403 || e.status === 404 ? 'トークンに Gist の権限がありません'
         : e.status ? `同期に失敗しました（${e.status}）` : 'オフライン（つながったら自動で同期します）';
     if (manual) toast(sync.error);
@@ -641,8 +641,9 @@ function scheduleSync() {
 }
 
 async function connectSync(token) {
-  token = token.trim();
+  token = token.replace(/\s+/g, ''); // コピーのときに混ざった空白や改行を取り除く
   if (!token) return toast('トークンを貼り付けてください');
+  if (!/^(ghp_|github_pat_)/.test(token)) return toast('GitHub のトークンではないようです。ghp_ で始まる文字列を貼り付けてください');
   syncCfg = { token, gistId: null, last: 0 };
   render();
   await syncNow(true);
