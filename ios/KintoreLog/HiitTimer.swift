@@ -115,7 +115,10 @@ final class HiitTimer: ObservableObject {
         if second != lastSecond {
             lastSecond = second
             secondsLeft = second
-            if !changed && second >= 1 && second <= 3 { tone.play(700, 0.1) } // 3・2・1 のカウント
+            if second >= 1 && second <= 3 { // 残り 3・2・1 は音と軽い振動（画面側で数字も弾ませる）
+                tone.play(880, 0.16)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
         }
         progress = min(1, max(0, 1 - left / duration))
     }
@@ -187,6 +190,7 @@ struct HiitTimerView: View {
 
     @StateObject private var timer: HiitTimer
     private let ticker = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+    @State private var pulse = false   // 残り 3・2・1 で数字を弾ませるための合図
 
     init(name: String, rounds: Int, work: Int, rest: Int, prep: Int, onClose: @escaping (Int?) -> Void) {
         self.name = name
@@ -242,6 +246,19 @@ struct HiitTimerView: View {
                 .minimumScaleFactor(0.3)
                 .lineLimit(1)
                 .opacity(timer.paused ? 0.45 : 1)
+                .scaleEffect(pulse ? 1.35 : 1)
+                .background(
+                    Circle().stroke(foreground, lineWidth: 10)
+                        .scaleEffect(pulse ? 0.6 : 1.5)
+                        .opacity(pulse ? 0.55 : 0)
+                )
+                .onChange(of: timer.secondsLeft) { _, second in
+                    guard second >= 1, second <= 3, !timer.paused else { return }
+                    pulse = true // まず大きくしてから、次の瞬間に元の大きさへ戻す＝「弾む」動き
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.5)) { pulse = false }
+                    }
+                }
             Text(timer.phase == .ready ? "全 \(timer.rounds) 本" : "\(min(timer.rounds, timer.done + 1)) / \(timer.rounds) 本目")
                 .font(.title3.weight(.heavy).monospacedDigit())
             ProgressView(value: timer.progress)

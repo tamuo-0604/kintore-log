@@ -86,7 +86,7 @@ function defaultState() {
     exercises: seedExercises(),
     sets: [],
     deleted: { sets: {}, exercises: {} },
-    settings: { restSec: 90, restAuto: true, sound: true, u: 0 },
+    settings: { restSec: 90, restAuto: true, sound: true, loud: true, u: 0 },
   };
 }
 
@@ -132,6 +132,7 @@ function normalize(raw) {
       restSec: Math.min(600, Math.max(10, num(st.restSec, 90))),
       restAuto: st.restAuto !== false,
       sound: st.sound !== false,
+      loud: st.loud !== false, // HIIT タイマー中は消音モードでも鳴らす
       u: num(st.u),
     },
   };
@@ -304,6 +305,11 @@ const confirmDialog = (title, text, okLabel, run) => openDialog(title, h('p', {}
 const rest = { end: 0, total: 0, tick: null };
 let audioCtx = null;
 
+// 消音モードでも合図音を鳴らすかどうかを iOS に伝える（対応している iOS のみ）。
+// 'playback' にすると消音モードでも鳴るが、ほかのアプリの音楽は止まる。'auto' は通常どおり
+function setLoudAudio(on) {
+  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'playback' : 'auto'; } catch (_) { /* 非対応 */ }
+}
 function unlockAudio() { // iOS は「タップ中」に一度音の準備をしないと鳴らせない
   if (!state.settings.sound) return;
   try {
@@ -311,14 +317,14 @@ function unlockAudio() { // iOS は「タップ中」に一度音の準備をし
     if (audioCtx.state === 'suspended') audioCtx.resume();
   } catch (_) { audioCtx = null; }
 }
-// 音を鳴らす。notes = [[開始(秒後), 高さ(Hz), 長さ(秒)], ...]
+// 音を鳴らす。notes = [[開始(秒後), 高さ(Hz), 長さ(秒), 音量(0〜1)], ...]
 function tones(notes) {
   if (!state.settings.sound || !audioCtx) return;
-  for (const [t, freq, dur = 0.18] of notes) {
+  for (const [t, freq, dur = 0.18, vol = 0.3] of notes) {
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
     o.frequency.value = freq;
     g.gain.setValueAtTime(0.0001, audioCtx.currentTime + t);
-    g.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + t + 0.02);
+    g.gain.exponentialRampToValueAtTime(vol, audioCtx.currentTime + t + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + t + dur);
     o.connect(g).connect(audioCtx.destination);
     o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + dur + 0.02);
@@ -369,6 +375,7 @@ function startHiit() {
   if (!ex) return;
   const rounds = Math.round(ui.reps), work = Math.round(ui.weight), restSec = Math.round(ui.interval || 0), prep = Math.max(0, Math.round(ui.prep || 0));
   if (!(rounds > 0 && work > 0)) return toast('本数と高強度の秒数を入力してください');
+  setLoudAudio(state.settings.sound && state.settings.loud); // 音の準備より先に伝える
   unlockAudio(); stopRest();
   Object.assign(hiit, {
     on: true, exId: ex.id, name: ex.name, date: ui.date, rounds, work, rest: restSec,
@@ -391,8 +398,8 @@ function advanceHiit(from) {
   return setPhase('work', hiit.work, from);
 }
 function cueHiit() {
-  if (hiit.phase === 'work') tones([[0, 1320, 0.4]]);
-  else if (hiit.phase === 'rest') tones([[0, 520, 0.4]]);
+  if (hiit.phase === 'work') tones([[0, 1320, 0.55, 0.6]]);
+  else if (hiit.phase === 'rest') tones([[0, 520, 0.55, 0.6]]);
   else if (hiit.phase === 'done') tones([[0, 880], [0.2, 1100], [0.4, 1320, 0.5]]);
 }
 function finishHiit() {
@@ -417,12 +424,21 @@ function tickHiit() {
   const leftMs = hiit.end - Date.now(), sec = Math.ceil(leftMs / 1000);
   if (sec !== hiit.lastSec) {
     hiit.lastSec = sec;
-    if (sec <= 3 && sec >= 1) tones([[0, 700, 0.1]]); // 3・2・1 のカウント
-    document.getElementById('hiit-num').textContent = sec >= 60 ? fmtDur(sec) : sec;
+    const num = document.getElementById('hiit-num');
+    num.textContent = sec >= 60 ? fmtDur(sec) : sec;
+    const counting = sec <= 3 && sec >= 1;
+    document.getElementById('hiit').classList.toggle('count', counting);
+    if (counting) { // 残り 3・2・1 は、音＋数字が弾む＋輪が広がる
+      tones([[0, 880, 0.16, 0.5]]);
+      replay(num, 'pop'); replay(document.getElementById('hiit-ring'), 'go');
+    }
     document.getElementById('hiit-left').textContent = `残り ${fmtDur(hiitRemaining(sec))}`;
   }
   document.getElementById('hiit-bar').style.width = `${Math.min(100, (1 - leftMs / (hiit.dur * 1000)) * 100)}%`;
 }
+
+// CSS アニメーションを最初からもう一度再生する
+function replay(el, cls) { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); }
 
 function buildHiit() {
   const el = document.getElementById('hiit');
@@ -451,7 +467,7 @@ function buildHiit() {
       h('button', { type: 'button', class: 'btn ghost', onclick: stopHiit }, '終了')),
     h('div', { class: 'hiit-main' },
       h('div', { class: 'hiit-label' }, label[0], h('small', {}, label[1])),
-      h('div', { id: 'hiit-num', class: 'hiit-num' }, ''),
+      h('div', { class: 'hiit-numwrap' }, h('i', { id: 'hiit-ring', class: 'hiit-ring' }), h('div', { id: 'hiit-num', class: 'hiit-num' }, '')),
       h('div', { class: 'hiit-round' }, hiit.phase === 'ready' ? `全 ${hiit.rounds} 本` : `${round} / ${hiit.rounds} 本目`),
       h('div', { class: 'hiit-track' }, h('i', { id: 'hiit-bar' })),
       h('div', { class: 'hiit-next' }, h('span', {}, next), h('span', { id: 'hiit-left' }, ''))),
@@ -477,6 +493,7 @@ function stopHiit() {
 function closeHiit(record) {
   clearInterval(hiit.tick);
   hiit.on = false;
+  setLoudAudio(false);
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   document.getElementById('hiit').hidden = true;
   if (record && hiit.done > 0 && exById(hiit.exId)) {
@@ -1263,7 +1280,8 @@ function viewMenu() {
           h('div', { class: 'chips' }, [60, 90, 120, 180].map((s) => h('button', {
             type: 'button', class: 'chip' + (st.restSec === s ? ' on' : ''), onclick: () => { st.restSec = s; st.u = Date.now(); save(); render(); },
           }, s < 120 ? `${s}秒` : `${s / 60}分`)))),
-        toggle('終了を音で知らせる', '消音モード中は鳴りません', 'sound')),
+        toggle('合図の音を鳴らす', '休憩タイマーの終了と、HIIT タイマーの合図', 'sound'),
+        toggle('HIIT 中は消音モードでも鳴らす', 'オンだと、ほかのアプリの音楽が止まることがあります', 'loud')),
       syncCard(),
       h('section', { class: 'card list' },
         h('div', { class: 'eyebrow' }, 'データ'),

@@ -388,3 +388,13 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .hiit-grid .stepper-value { gap: 2px; }
 .hiit-grid .stepper-value input { font-size: 32px; }
 .hiit-grid .stepper-value span { font-size: 13px; width: 1.2em; }
+
+/* HIIT: 残り 3・2・1 の演出 */
+.hiit-numwrap { position: relative; display: grid; place-items: center; }
+.hiit-ring { position: absolute; width: min(70vw, 60vh, 460px); aspect-ratio: 1; border-radius: 50%; border: 10px solid currentColor; opacity: 0; pointer-events: none; }
+.hiit-ring.go { animation: ring .9s ease-out; }
+.hiit-num.pop { animation: pop .5s cubic-bezier(.2, .9, .3, 1); }
+#hiit.count .hiit-label { animation: blink 1s steps(2, jump-none) infinite; }
+@keyframes pop { from { transform: scale(1.4); } to { transform: scale(1); } }
+@keyframes ring { from { transform: scale(.55); opacity: .55; } to { transform: scale(1.5); opacity: 0; } }
+@keyframes blink { from { opacity: 1; } to { opacity: .35; } }
