@@ -22,19 +22,27 @@ const PARTS = [
   { id: 'shoulders', name: '肩' },
   { id: 'arms', name: '腕' },
   { id: 'abs', name: '腹' },
+  { id: 'hiit', name: 'HIIT' },
+  { id: 'cardio', name: '有酸素' },
   { id: 'other', name: 'その他' },
 ];
-const partName = (id) => (PARTS.find((p) => p.id === id) || PARTS[6]).name;
+const partName = (id) => (PARTS.find((p) => p.id === id) || PARTS[PARTS.length - 1]).name;
 
 // 記録タイプ: weight=重量×回数 / body=回数のみ（自重） / time=秒数
-const KINDS = { weight: '重量 × 回数', body: '回数のみ（自重）', time: '時間（秒）' };
+//   hiit=HIIT（本数・高強度の秒数・インターバルの秒数を決めてタイマーで実施）
+//   cardio=距離×時間（ランニングなど）
+const KINDS = {
+  weight: '重量 × 回数', body: '回数のみ（自重）', time: '時間（秒）',
+  hiit: 'HIIT（タイマー）', cardio: '距離 × 時間（ランニングなど）',
+};
+const DATA_VERSION = 2; // データの形の版。2 で HIIT・有酸素を追加
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 // 最初から入っているメニュー。id を固定しているので、どの端末でも「同じメニュー」として同期できる
 function seedExercises() {
   const E = (key, name, part, kind, weight, reps, step = 2.5) =>
-    ({ id: 'seed-' + key, name, part, kind, step, defWeight: weight, defReps: reps, archived: false, u: 0 });
+    ({ id: 'seed-' + key, name, part, kind, step, defWeight: weight, defReps: reps, archived: false, rest: 10, u: 0 });
   return [
     E('bench-press', 'ベンチプレス', 'chest', 'weight', 40, 10),
     E('dumbbell-press', 'ダンベルプレス', 'chest', 'weight', 14, 10, 2),
@@ -51,18 +59,27 @@ function seedExercises() {
     E('triceps-pressdown', 'トライセプスプレスダウン', 'arms', 'weight', 20, 12),
     E('crunch', 'クランチ', 'abs', 'body', 0, 20),
     E('plank', 'プランク', 'abs', 'time', 0, 60),
+    // HIIT: 本数, 高強度の秒数, インターバルの秒数
+    { ...E('hiit-tabata', 'タバタ式（20秒×8本）', 'hiit', 'hiit', 20, 8), rest: 10 },
+    { ...E('hiit-30-30', 'HIIT 30-30', 'hiit', 'hiit', 30, 10), rest: 30 },
+    // 有酸素: 距離(km), 時間(秒), 距離の刻み
+    E('running', 'ランニング', 'cardio', 'cardio', 5, 1800, 0.5),
+    E('walking', 'ウォーキング', 'cardio', 'cardio', 3, 1800, 0.5),
   ];
 }
 
 /* データの形
  *   exercises: メニュー。u は最終更新時刻（ミリ秒）
- *   sets:      記録。{ id, exId, date:'YYYY-MM-DD', ts, weight, reps, u }  ※time タイプは reps に秒数
+ *   sets:      記録。{ id, exId, date:'YYYY-MM-DD', ts, weight, reps, u }
+ *              weight / reps の意味は記録タイプで変わる:
+ *                weight … 重量(kg) / 回数      body … (未使用) / 回数     time … (未使用) / 秒数
+ *                hiit   … 高強度の秒数 / やった本数      cardio … 距離(km) / 時間(秒)
  *   deleted:   削除した記録・メニューの id と削除時刻。同期のとき「他の端末でも消す」ために残す
  *   epoch:     「全削除」「バックアップから復元」をした時刻。新しいほうが丸ごと優先される
  */
 function defaultState() {
   return {
-    version: 1,
+    version: DATA_VERSION,
     epoch: 0,
     exercises: seedExercises(),
     sets: [],
@@ -75,6 +92,7 @@ function defaultState() {
 function normalize(raw) {
   if (!raw || !Array.isArray(raw.exercises) || !Array.isArray(raw.sets)) return null;
   const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
+  const del = raw.deleted || {};
   const exercises = raw.exercises.filter((e) => e && e.id && e.name).map((e) => ({
     id: String(e.id),
     name: String(e.name).slice(0, 40),
@@ -84,8 +102,15 @@ function normalize(raw) {
     defWeight: Math.max(0, num(e.defWeight)),
     defReps: Math.max(1, num(e.defReps, 10)),
     archived: !!e.archived,
+    rest: Math.max(0, num(e.rest, 10)), // HIIT のインターバル秒数
     u: num(e.u),
   }));
+  // 古い版のデータには、あとから追加した初期メニュー（HIIT・有酸素）を足す。自分で消したものは足さない
+  if (num(raw.version, 1) < 2) {
+    for (const e of seedExercises().filter((x) => x.kind === 'hiit' || x.kind === 'cardio')) {
+      if (!exercises.some((x) => x.id === e.id) && !(del.exercises || {})[e.id]) exercises.push({ rest: 10, ...e });
+    }
+  }
   const ids = new Set(exercises.map((e) => e.id));
   const sets = raw.sets
     .filter((s) => s && ids.has(String(s.exId)) && /^\d{4}-\d{2}-\d{2}$/.test(s.date))
@@ -96,10 +121,9 @@ function normalize(raw) {
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
   const tomb = (m) => Object.fromEntries(Object.entries(m && typeof m === 'object' ? m : {})
     .map(([k, v]) => [k, num(v)]).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
-  const del = raw.deleted || {};
   const st = raw.settings || {};
   return {
-    version: 1, epoch: num(raw.epoch), exercises, sets,
+    version: DATA_VERSION, epoch: num(raw.epoch), exercises, sets,
     deleted: { sets: tomb(del.sets), exercises: tomb(del.exercises) },
     settings: {
       restSec: Math.min(600, Math.max(10, num(st.restSec, 90))),
@@ -158,14 +182,31 @@ const setsOn = (date) => state.sets.filter((s) => s.date === date).sort((a, b) =
 // 推定1RM（Epley式）: 1回だけ挙げられる重さの目安
 const est1RM = (w, r) => (r <= 1 ? w : w * (1 + r / 30));
 // その種目での「強さ」の指標（グラフや自己ベスト判定に使う）
-const score = (ex, s) => (ex.kind === 'weight' ? est1RM(s.weight, s.reps) : s.reps);
-const scoreLabel = (ex) => (ex.kind === 'weight' ? '推定1RM' : ex.kind === 'time' ? '最長時間' : '最高回数');
-const scoreUnit = (ex) => (ex.kind === 'weight' ? 'kg' : ex.kind === 'time' ? '秒' : '回');
+// 距離を使わない有酸素メニュー（最初の距離が 0）は、時間で比べる
+const timeOnly = (ex) => ex.kind === 'cardio' && !(ex.defWeight > 0);
+// その種目での「強さ」の指標（グラフや自己ベスト判定に使う）
+function score(ex, s) {
+  if (ex.kind === 'weight') return est1RM(s.weight, s.reps);
+  if (ex.kind === 'hiit') return s.reps * s.weight;            // 高強度の合計秒数
+  if (ex.kind === 'cardio') return timeOnly(ex) ? s.reps / 60 : s.weight; // 分 または km
+  return s.reps;
+}
+const scoreLabel = (ex) => ({ weight: '推定1RM', time: '最長時間', hiit: '高強度の合計', cardio: timeOnly(ex) ? '最長時間' : '最長距離' }[ex.kind] || '最高回数');
+const scoreUnit = (ex) => ({ weight: 'kg', time: '秒', hiit: '秒', cardio: timeOnly(ex) ? '分' : 'km' }[ex.kind] || '回');
 const volume = (ex, s) => (ex && ex.kind === 'weight' ? s.weight * s.reps : 0);
+const fmtMin = (sec) => `${fmtNum(sec / 60)}分`;
+// 1km あたりのペース（例: 5'36"/km）
+function pace(km, sec) {
+  if (!(km > 0) || !(sec > 0)) return '';
+  const p = Math.round(sec / km);
+  return `${Math.floor(p / 60)}'${pad2(p % 60)}"/km`;
+}
 
 function fmtSet(ex, s) {
   if (ex.kind === 'weight') return `${fmtNum(s.weight)}kg × ${s.reps}`;
   if (ex.kind === 'time') return `${s.reps}秒`;
+  if (ex.kind === 'hiit') return `${s.reps}本 × ${fmtNum(s.weight)}秒`;
+  if (ex.kind === 'cardio') return s.weight > 0 ? `${fmtNum(s.weight)}km・${fmtMin(s.reps)}` : fmtMin(s.reps);
   return `${s.reps}回`;
 }
 
@@ -267,18 +308,20 @@ function unlockAudio() { // iOS は「タップ中」に一度音の準備をし
     if (audioCtx.state === 'suspended') audioCtx.resume();
   } catch (_) { audioCtx = null; }
 }
-function beep() {
+// 音を鳴らす。notes = [[開始(秒後), 高さ(Hz), 長さ(秒)], ...]
+function tones(notes) {
   if (!state.settings.sound || !audioCtx) return;
-  [0, 0.22, 0.44].forEach((t, i) => {
+  for (const [t, freq, dur = 0.18] of notes) {
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.frequency.value = i === 2 ? 1320 : 880;
+    o.frequency.value = freq;
     g.gain.setValueAtTime(0.0001, audioCtx.currentTime + t);
     g.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + t + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + t + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + t + dur);
     o.connect(g).connect(audioCtx.destination);
-    o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.2);
-  });
+    o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + dur + 0.02);
+  }
 }
+const beep = () => tones([[0, 880], [0.22, 880], [0.44, 1320]]);
 function startRest(sec) {
   rest.total = sec; rest.end = Date.now() + sec * 1000;
   clearInterval(rest.tick);
@@ -303,6 +346,142 @@ function drawRest() {
       h('button', { class: 'chip', type: 'button', onclick: () => { rest.end += 30000; rest.total += 30; drawRest(); } }, '+30秒'),
       h('button', { class: 'chip', type: 'button', onclick: stopRest }, 'スキップ'));
   } else el.querySelector('.rest-time').textContent = time;
+}
+
+/* ───────────── HIIT タイマー ─────────────
+ * 準備(5秒) →［高強度 → インターバル］× 本数 → 完了。
+ * 「この時刻に終わる」という終了時刻で管理するので、画面を離れて戻ってもずれない。
+ */
+const hiit = { on: false };
+let wakeLock = null;
+const fmtDur = (sec) => { sec = Math.max(0, Math.round(sec)); return `${Math.floor(sec / 60)}:${pad2(sec % 60)}`; };
+const hiitTotal = (rounds, work, restSec) => rounds * work + Math.max(0, rounds - 1) * restSec;
+
+async function keepAwake() { // タイマー中は画面が消えないようにする（対応端末のみ）
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) { /* 非対応なら何もしない */ }
+}
+
+function startHiit() {
+  const ex = exById(ui.exId);
+  if (!ex) return;
+  const rounds = Math.round(ui.reps), work = Math.round(ui.weight), restSec = Math.round(ui.interval || 0);
+  if (!(rounds > 0 && work > 0)) return toast('本数と高強度の秒数を入力してください');
+  unlockAudio(); stopRest();
+  Object.assign(hiit, {
+    on: true, exId: ex.id, name: ex.name, date: ui.date, rounds, work, rest: restSec,
+    phase: 'ready', dur: 5, end: Date.now() + 5000, done: 0, paused: false, left: 0, lastSec: -1, startedAt: Date.now(),
+  });
+  keepAwake();
+  buildHiit();
+  clearInterval(hiit.tick);
+  hiit.tick = setInterval(tickHiit, 100);
+}
+
+function setPhase(phase, dur, from) { hiit.phase = phase; hiit.dur = dur; hiit.end = from + dur * 1000; hiit.lastSec = -1; }
+// 次の段階へ。from は「前の段階が終わった時刻」
+function advanceHiit(from) {
+  if (hiit.phase === 'ready' || hiit.phase === 'rest') return setPhase('work', hiit.work, from);
+  hiit.done++; // 高強度を1本やり終えた
+  if (hiit.done >= hiit.rounds) return finishHiit();
+  if (hiit.rest > 0) return setPhase('rest', hiit.rest, from);
+  return setPhase('work', hiit.work, from);
+}
+function cueHiit() {
+  if (hiit.phase === 'work') tones([[0, 1320, 0.4]]);
+  else if (hiit.phase === 'rest') tones([[0, 520, 0.4]]);
+  else if (hiit.phase === 'done') tones([[0, 880], [0.2, 1100], [0.4, 1320, 0.5]]);
+}
+function finishHiit() {
+  hiit.phase = 'done'; hiit.elapsed = Math.round((Date.now() - hiit.startedAt) / 1000);
+  clearInterval(hiit.tick);
+}
+// いまの段階のあとに残っている時間（秒）
+function hiitRemaining(leftSec) {
+  const toGo = hiit.rounds - hiit.done; // まだ終わっていない高強度の本数（実行中を含む）
+  if (hiit.phase === 'ready') return leftSec + hiitTotal(hiit.rounds, hiit.work, hiit.rest);
+  if (hiit.phase === 'work') return leftSec + (toGo - 1) * (hiit.work + hiit.rest);
+  return leftSec + toGo * hiit.work + (toGo - 1) * hiit.rest;
+}
+
+function tickHiit() {
+  if (!hiit.on || hiit.paused || hiit.phase === 'done') return;
+  const before = hiit.phase + hiit.done;
+  let guard = 0;
+  while (hiit.phase !== 'done' && Date.now() >= hiit.end && guard++ < 1000) advanceHiit(hiit.end);
+  if (hiit.phase + hiit.done !== before) { cueHiit(); buildHiit(); }
+  if (hiit.phase === 'done') return;
+  const leftMs = hiit.end - Date.now(), sec = Math.ceil(leftMs / 1000);
+  if (sec !== hiit.lastSec) {
+    hiit.lastSec = sec;
+    if (sec <= 3 && sec >= 1) tones([[0, 700, 0.1]]); // 3・2・1 のカウント
+    document.getElementById('hiit-num').textContent = sec >= 60 ? fmtDur(sec) : sec;
+    document.getElementById('hiit-left').textContent = `残り ${fmtDur(hiitRemaining(sec))}`;
+  }
+  document.getElementById('hiit-bar').style.width = `${Math.min(100, (1 - leftMs / (hiit.dur * 1000)) * 100)}%`;
+}
+
+function buildHiit() {
+  const el = document.getElementById('hiit');
+  el.hidden = false;
+  el.className = `ph-${hiit.phase}` + (hiit.paused ? ' paused' : '');
+  if (hiit.phase === 'done') {
+    const full = hiit.done >= hiit.rounds;
+    return setKids(el,
+      h('div', { class: 'hiit-main' },
+        h('div', { class: 'hiit-trophy' }, icon('trophy')),
+        h('div', { class: 'hiit-title' }, full ? 'おつかれさま！' : '途中で終了'),
+        h('div', { class: 'hiit-sum' }, `${hiit.done}本 × ${hiit.work}秒`),
+        h('div', { class: 'hiit-sub' }, `高強度 合計 ${fmtDur(hiit.done * hiit.work)}・所要 ${fmtDur(hiit.elapsed)}`)),
+      h('div', { class: 'hiit-ctrl col' },
+        h('button', { type: 'button', class: 'btn primary big', onclick: () => closeHiit(true) }, '記録して閉じる'),
+        h('button', { type: 'button', class: 'btn ghost wide', onclick: () => closeHiit(false) }, '記録しない')));
+  }
+  const label = { ready: ['READY', '準備'], work: ['HIGH', '全力！'], rest: ['REST', '休憩'] }[hiit.phase];
+  const round = Math.min(hiit.rounds, hiit.done + 1);
+  const next = hiit.phase === 'work'
+    ? (hiit.done + 1 >= hiit.rounds ? '次: 完了' : hiit.rest > 0 ? `次: 休憩 ${hiit.rest}秒` : `次: 高強度 ${hiit.work}秒`)
+    : `次: 高強度 ${hiit.work}秒`;
+  setKids(el,
+    h('div', { class: 'hiit-top' },
+      h('span', { class: 'hiit-name' }, hiit.name),
+      h('button', { type: 'button', class: 'btn ghost', onclick: stopHiit }, '終了')),
+    h('div', { class: 'hiit-main' },
+      h('div', { class: 'hiit-label' }, label[0], h('small', {}, label[1])),
+      h('div', { id: 'hiit-num', class: 'hiit-num' }, ''),
+      h('div', { class: 'hiit-round' }, hiit.phase === 'ready' ? `全 ${hiit.rounds} 本` : `${round} / ${hiit.rounds} 本目`),
+      h('div', { class: 'hiit-track' }, h('i', { id: 'hiit-bar' })),
+      h('div', { class: 'hiit-next' }, h('span', {}, next), h('span', { id: 'hiit-left' }, ''))),
+    h('div', { class: 'hiit-ctrl' },
+      h('button', { type: 'button', class: 'btn', onclick: pauseHiit }, hiit.paused ? '再開' : '一時停止'),
+      h('button', { type: 'button', class: 'btn', onclick: () => { if (hiit.paused) pauseHiit(); hiit.end = Date.now(); tickHiit(); } }, 'スキップ')));
+  hiit.lastSec = -1;
+  if (hiit.paused) { // 止めている間も数字を出しておく
+    const sec = Math.ceil(hiit.left / 1000);
+    document.getElementById('hiit-num').textContent = sec >= 60 ? fmtDur(sec) : sec;
+    document.getElementById('hiit-left').textContent = `残り ${fmtDur(hiitRemaining(sec))}`;
+    document.getElementById('hiit-bar').style.width = `${(1 - hiit.left / (hiit.dur * 1000)) * 100}%`;
+  }
+}
+
+function pauseHiit() {
+  if (hiit.paused) { hiit.paused = false; hiit.end = Date.now() + hiit.left; } else { hiit.paused = true; hiit.left = Math.max(0, hiit.end - Date.now()); }
+  buildHiit();
+}
+function stopHiit() {
+  if (hiit.done > 0) { finishHiit(); buildHiit(); } else closeHiit(false); // 1本もやっていなければそのまま閉じる
+}
+function closeHiit(record) {
+  clearInterval(hiit.tick);
+  hiit.on = false;
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  document.getElementById('hiit').hidden = true;
+  if (record && hiit.done > 0 && exById(hiit.exId)) {
+    const now = Date.now();
+    state.sets.push({ id: uid(), exId: hiit.exId, date: hiit.date, ts: now, weight: hiit.work, reps: hiit.done, u: now });
+    save();
+    toast(`${hiit.done}本 × ${hiit.work}秒 を記録しました`);
+  }
+  render();
 }
 
 /* ───────────── 端末間の同期（GitHub Gist） ─────────────
@@ -356,7 +535,7 @@ function mergeData(a, b) {
   }
   const sets = [...pick(b.sets, a.sets, deleted.sets).values()].map((s) => (remap[s.exId] ? { ...s, exId: remap[s.exId] } : s));
   return normalize({
-    epoch: a.epoch, exercises: [...exMap.values()], sets, deleted,
+    version: DATA_VERSION, epoch: a.epoch, exercises: [...exMap.values()], sets, deleted,
     settings: a.settings.u >= b.settings.u ? a.settings : b.settings,
   });
 }
@@ -391,7 +570,12 @@ async function readRemote() {
   const f = gist.files[SYNC_FILE];
   if (!f) return null;
   const text = f.truncated ? await (await fetch(f.raw_url, { cache: 'no-store' })).text() : f.content;
-  try { return normalize(JSON.parse(text)); } catch (_) { return null; }
+  let raw;
+  try { raw = JSON.parse(text); } catch (_) { return null; }
+  if (raw && raw.version > DATA_VERSION) { // 他の端末のほうがアプリが新しい。古いアプリで上書きして壊さないよう止める
+    const e = new Error('app too old'); e.old = true; throw e;
+  }
+  return normalize(raw);
 }
 
 async function writeRemote(content) {
@@ -436,7 +620,8 @@ async function syncNow(manual) {
     if (manual) toast('同期しました');
   } catch (e) {
     sync.status = e.status || 0;
-    sync.error = e.status === 401 ? 'トークンが無効です。作り直して設定し直してください'
+    sync.error = e.old ? 'アプリが古いため同期を止めています。アプリを閉じて開き直してください'
+      : e.status === 401 ? 'トークンが無効です。作り直して設定し直してください'
       : e.status === 403 || e.status === 404 ? 'トークンに Gist の権限がありません'
         : e.status ? `同期に失敗しました（${e.status}）` : 'オフライン（つながったら自動で同期します）';
     if (manual) toast(sync.error);
@@ -466,6 +651,7 @@ async function connectSync(token) {
 const ui = {
   tab: 'log',
   date: today(),      // 記録対象の日（通常は今日）
+  interval: 10,       // HIIT のインターバル秒数（入力中）
   part: 'all',        // 記録タブの部位フィルタ
   exId: null,         // 入力中の種目
   weight: 0, reps: 0, // 入力中の値
@@ -501,14 +687,18 @@ function selectExercise(ex) {
   const base = todays[todays.length - 1] || (last && last.sets[0]);
   ui.weight = base ? base.weight : ex.defWeight;
   ui.reps = base ? base.reps : ex.defReps;
+  if (ex.kind === 'hiit') { // HIIT は毎回メニューで決めた内容から始める
+    ui.weight = ex.defWeight; ui.reps = ex.defReps; ui.interval = ex.rest;
+  }
 }
 
 function recordSet() {
   const ex = exById(ui.exId);
   if (!ex) return;
   unlockAudio();
-  const reps = Math.round(ui.reps), weight = ex.kind === 'weight' ? ui.weight : 0;
-  if (!(reps > 0)) return toast(ex.kind === 'time' ? '秒数を入力してください' : '回数を入力してください');
+  const reps = Math.round(ui.reps), weight = ['weight', 'hiit', 'cardio'].includes(ex.kind) ? ui.weight : 0;
+  if (!(reps > 0)) return toast({ time: '秒数', cardio: '時間', hiit: '本数' }[ex.kind] ? `${{ time: '秒数', cardio: '時間', hiit: '本数' }[ex.kind]}を入力してください` : '回数を入力してください');
+  if (ex.kind === 'hiit' && !(weight > 0)) return toast('高強度の秒数を入力してください');
   const now = Date.now();
   const s = { id: uid(), exId: ex.id, date: ui.date, ts: now, weight, reps, u: now };
   const prior = setsOf(ex.id);
@@ -518,7 +708,8 @@ function recordSet() {
   if (best != null && score(ex, s) > best + 1e-9) {
     toast(`自己ベスト更新！ ${scoreLabel(ex)} ${fmtNum(score(ex, s))}${scoreUnit(ex)}`, 'pr');
   } else toast(`${fmtSet(ex, s)} を記録しました`);
-  if (state.settings.restAuto && ui.date === today()) startRest(state.settings.restSec);
+  // セット間の休憩タイマーは筋トレ系だけ（HIIT・有酸素では出さない）
+  if (state.settings.restAuto && ui.date === today() && !['hiit', 'cardio'].includes(ex.kind)) startRest(state.settings.restSec);
   render();
 }
 
@@ -555,7 +746,7 @@ function inputPanel() {
   const all = setsOf(ex.id);
   const best = all.length ? Math.max(...all.map((s) => score(ex, s))) : null;
 
-  return h('section', { class: 'panel' },
+  return h('section', { class: `panel k-${ex.kind}` },
     h('header', { class: 'panel-head' },
       h('div', {},
         h('div', { class: 'eyebrow' }, partDot(ex.part), partName(ex.part)),
@@ -571,20 +762,33 @@ function inputPanel() {
         h('span', { class: 'ref-v' }, `${scoreLabel(ex)} ${fmtNum(best)}${scoreUnit(ex)}`))),
 
     ex.kind === 'weight' && stepper('重量', 'kg', () => ui.weight, ex.step, 0, (v) => { ui.weight = v; }),
-    ex.kind === 'time'
-      ? stepper('時間', '秒', () => ui.reps, 5, 0, (v) => { ui.reps = v; }, [30, 45, 60, 90, 120])
-      : stepper('回数', '回', () => ui.reps, 1, 0, (v) => { ui.reps = v; }, [5, 8, 10, 12, 15, 20]),
+    ex.kind === 'hiit' && [
+      stepper('本数（セット数）', '本', () => ui.reps, 1, 1, (v) => { ui.reps = v; }, [6, 8, 10, 12]),
+      stepper('高強度', '秒', () => ui.weight, 5, 5, (v) => { ui.weight = v; }, [20, 30, 40, 45, 60]),
+      stepper('インターバル（休憩）', '秒', () => ui.interval, 5, 0, (v) => { ui.interval = v; }, [10, 15, 20, 30, 60]),
+      h('p', { class: 'calc' }, `合計 ${fmtDur(hiitTotal(ui.reps, ui.weight, ui.interval))}（高強度 ${fmtDur(ui.reps * ui.weight)}）`),
+    ],
+    ex.kind === 'cardio' && [
+      stepper('距離', 'km', () => ui.weight, ex.step, 0, (v) => { ui.weight = v; }),
+      stepper('時間', '分', () => Math.round(ui.reps / 6) / 10, 1, 0, (v) => { ui.reps = v * 60; }, [15, 20, 30, 45, 60]),
+      pace(ui.weight, ui.reps) && h('p', { class: 'calc' }, `ペース ${pace(ui.weight, ui.reps)}`),
+    ],
+    ex.kind === 'time' && stepper('時間', '秒', () => ui.reps, 5, 0, (v) => { ui.reps = v; }, [30, 45, 60, 90, 120]),
+    (ex.kind === 'weight' || ex.kind === 'body') && stepper('回数', '回', () => ui.reps, 1, 0, (v) => { ui.reps = v; }, [5, 8, 10, 12, 15, 20]),
 
-    h('button', { type: 'button', class: 'btn primary big', onclick: recordSet },
-      `${todays.length + 1}セット目を記録`),
+    ex.kind === 'hiit'
+      ? [h('button', { type: 'button', class: 'btn primary big', onclick: startHiit }, 'タイマーをスタート'),
+        h('button', { type: 'button', class: 'btn ghost wide', onclick: recordSet }, 'タイマーを使わずに記録だけする')]
+      : h('button', { type: 'button', class: 'btn primary big', onclick: recordSet },
+        ex.kind === 'cardio' ? '記録する' : `${todays.length + 1}セット目を記録`),
 
     todays.length > 0 && h('div', { class: 'today-sets' },
-      h('div', { class: 'eyebrow' }, ui.date === today() ? '今日のセット' : `${md(ui.date)} のセット`),
+      h('div', { class: 'eyebrow' }, ui.date === today() ? '今日の記録' : `${md(ui.date)} の記録`),
       h('ol', { class: 'setlist' }, todays.map((s, i) => h('li', {},
         h('span', { class: 'set-no' }, i + 1),
         h('span', { class: 'set-v' }, fmtSet(ex, s)),
         h('button', {
-          type: 'button', class: 'icon-btn small', 'aria-label': `${i + 1}セット目を削除`,
+          type: 'button', class: 'icon-btn small', 'aria-label': `${i + 1}件目を削除`,
           onclick: () => { removeSet(s.id); save(); toast('削除しました'); render(); },
         }, icon('close')))))));
 }
@@ -654,9 +858,14 @@ function editSetDialog(ex, s) {
   let w = s.weight, r = s.reps;
   const field = (label, val, set, dec) => h('label', { class: 'field' }, h('span', {}, label),
     h('input', { type: 'number', inputMode: dec ? 'decimal' : 'numeric', step: 'any', min: '0', value: String(val), oninput: (e) => set(parseFloat(e.target.value) || 0) }));
-  openDialog(`${ex.name} を編集`,
-    [ex.kind === 'weight' && field('重量 (kg)', w, (v) => { w = v; }, true),
-      field(ex.kind === 'time' ? '時間 (秒)' : '回数', r, (v) => { r = v; })],
+  const fields = {
+    weight: [field('重量 (kg)', w, (v) => { w = v; }, true), field('回数', r, (v) => { r = v; })],
+    hiit: [field('本数', r, (v) => { r = v; }), field('高強度 (秒)', w, (v) => { w = v; })],
+    cardio: [field('距離 (km)', w, (v) => { w = v; }, true), field('時間 (分)', Math.round(r / 6) / 10, (v) => { r = v * 60; }, true)],
+    time: [field('時間 (秒)', r, (v) => { r = v; })],
+    body: [field('回数', r, (v) => { r = v; })],
+  };
+  openDialog(`${ex.name} を編集`, fields[ex.kind],
     [{ label: '削除', kind: 'danger', run: () => { removeSet(s.id); save(); render(); } },
       { label: 'キャンセル' },
       { label: '保存', kind: 'primary', run: () => {
@@ -841,7 +1050,9 @@ function viewStats() {
         tile(scoreLabel(ex), fmtNum(Math.max(...exSets.map((s) => score(ex, s)))), scoreUnit(ex)),
         ex.kind === 'weight'
           ? tile('最大重量', fmtNum(Math.max(...exSets.map((s) => s.weight))), 'kg')
-          : tile('累計', fmtNum(exSets.reduce((a, s) => a + s.reps, 0)), scoreUnit(ex)),
+          : ex.kind === 'hiit' ? tile('累計本数', fmtNum(exSets.reduce((a, s) => a + s.reps, 0)), '本')
+            : ex.kind === 'cardio' && !timeOnly(ex) ? tile('累計距離', fmtNum(exSets.reduce((a, s) => a + s.weight, 0)), 'km')
+              : tile('累計', fmtNum(exSets.reduce((a, s) => a + score(ex, s), 0)), scoreUnit(ex)),
         tile('実施日数', allPts.length, '日')),
       line(pts, scoreUnit(ex), 'ex:' + ex.id),
       h('p', { class: 'hint' }, `各日のベスト（${scoreLabel(ex)}）の推移。` +
@@ -852,17 +1063,34 @@ function viewStats() {
 
 function exerciseDialog(ex) {
   const isNew = !ex;
-  const d = ex ? { ...ex } : { name: '', part: 'chest', kind: 'weight', step: 2.5, defWeight: 20, defReps: 10 };
+  const d = ex ? { ...ex } : { name: '', part: 'chest', kind: 'weight', step: 2.5, defWeight: 20, defReps: 10, rest: 10 };
+  const numField = (label, val, set, dec) => h('label', { class: 'field' }, h('span', {}, label),
+    h('input', { type: 'number', inputMode: dec ? 'decimal' : 'numeric', step: 'any', min: '0', value: String(val), oninput: (e) => set(parseFloat(e.target.value) || 0) }));
+  // 記録のしかたを変えたら、その方式に合う初期値に入れ替える
+  const setKind = (k) => {
+    if (k === d.kind) return;
+    d.kind = k;
+    Object.assign(d, { weight: { step: 2.5, defWeight: 20, defReps: 10 }, body: { defWeight: 0, defReps: 10 }, time: { defWeight: 0, defReps: 60 },
+      hiit: { defWeight: 20, defReps: 8, rest: 10 }, cardio: { step: 0.5, defWeight: 5, defReps: 1800 } }[k]);
+  };
   const body = h('div', {});
   const draw = () => setKids(body,
     h('label', { class: 'field' }, h('span', {}, 'メニュー名'),
       h('input', { type: 'text', value: d.name, maxLength: 40, placeholder: '例: インクラインベンチプレス', oninput: (e) => { d.name = e.target.value; } })),
-    h('div', { class: 'field' }, h('span', {}, '部位'),
+    h('div', { class: 'field' }, h('span', {}, 'カテゴリ'),
       h('div', { class: 'chips' }, PARTS.map((p) => h('button', {
-        type: 'button', class: 'chip' + (d.part === p.id ? ' on' : ''), onclick: () => { d.part = p.id; draw(); },
+        type: 'button', class: 'chip' + (d.part === p.id ? ' on' : ''), onclick: () => {
+          d.part = p.id;
+          if (isNew) { // カテゴリに合う記録方式を自動で選ぶ
+            if (p.id === 'hiit') setKind('hiit');
+            else if (p.id === 'cardio') setKind('cardio');
+            else if (d.kind === 'hiit' || d.kind === 'cardio') setKind('weight');
+          }
+          draw();
+        },
       }, partDot(p.id), p.name)))),
     h('label', { class: 'field' }, h('span', {}, '記録のしかた'),
-      h('select', { class: 'select wide', onchange: (e) => { d.kind = e.target.value; if (d.kind === 'time' && isNew) d.defReps = 60; draw(); } },
+      h('select', { class: 'select wide', onchange: (e) => { setKind(e.target.value); draw(); } },
         Object.entries(KINDS).map(([k, v]) => h('option', { value: k, selected: d.kind === k }, v)))),
     d.kind === 'weight' && h('div', { class: 'field-row' },
       h('label', { class: 'field' }, h('span', {}, '最初の重量 (kg)'),
@@ -870,7 +1098,18 @@ function exerciseDialog(ex) {
       h('label', { class: 'field' }, h('span', {}, '＋−の刻み (kg)'),
         h('select', { class: 'select wide', onchange: (e) => { d.step = parseFloat(e.target.value); } },
           [0.5, 1, 2, 2.5, 5, 10].map((v) => h('option', { value: String(v), selected: d.step === v }, v))))),
-    h('label', { class: 'field' }, h('span', {}, d.kind === 'time' ? '最初の秒数' : '最初の回数'),
+    d.kind === 'hiit' && [
+      h('div', { class: 'field-row' },
+        numField('本数', d.defReps, (v) => { d.defReps = Math.round(v); }),
+        numField('高強度 (秒)', d.defWeight, (v) => { d.defWeight = Math.round(v); }),
+        numField('インターバル (秒)', d.rest, (v) => { d.rest = Math.round(v); })),
+      h('p', { class: 'hint' }, '例: タバタ式は 8本・高強度20秒・インターバル10秒。実施するときにも調整できます。')],
+    d.kind === 'cardio' && [
+      h('div', { class: 'field-row' },
+        numField('最初の距離 (km)', d.defWeight, (v) => { d.defWeight = v; }, true),
+        numField('最初の時間 (分)', Math.round(d.defReps / 6) / 10, (v) => { d.defReps = Math.round(v * 60); }, true)),
+      h('p', { class: 'hint' }, '距離を 0 にすると、時間だけを記録するメニューになります（バイクなど）。')],
+    (d.kind === 'weight' || d.kind === 'body' || d.kind === 'time') && h('label', { class: 'field' }, h('span', {}, d.kind === 'time' ? '最初の秒数' : '最初の回数'),
       h('input', { type: 'number', inputMode: 'numeric', min: '1', value: String(d.defReps), oninput: (e) => { d.defReps = parseInt(e.target.value, 10) || 0; } })));
   draw();
 
@@ -889,7 +1128,7 @@ function exerciseDialog(ex) {
     { label: '保存', kind: 'primary', run: () => {
       d.name = d.name.trim();
       if (!d.name) { toast('メニュー名を入力してください'); return false; }
-      if (!(d.defReps > 0)) { toast('1以上の数を入力してください'); return false; }
+      if (!(d.defReps > 0) || (d.kind === 'hiit' && !(d.defWeight > 0))) { toast('1以上の数を入力してください'); return false; }
       if (isNew) state.exercises.push({ ...d, id: uid(), archived: false, u: Date.now() });
       else Object.assign(ex, d, { u: Date.now() });
       save(); toast(isNew ? '追加しました' : '保存しました'); render();
@@ -905,13 +1144,17 @@ function download(name, text, type) {
 }
 function exportCsv() {
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = [['日付', 'メニュー', '部位', '重量(kg)', '回数', '秒数'].join(',')];
+  const rows = [['日付', 'メニュー', 'カテゴリ', '重量(kg)', '回数・本数', '時間(秒)', '距離(km)'].join(',')];
   for (const s of [...state.sets].sort((a, b) => a.date.localeCompare(b.date) || a.ts - b.ts)) {
     const ex = exById(s.exId); if (!ex) continue;
-    rows.push([s.date, q(ex.name), partName(ex.part), ex.kind === 'weight' ? s.weight : '',
-      ex.kind === 'time' ? '' : s.reps, ex.kind === 'time' ? s.reps : ''].join(','));
+    const k = ex.kind;
+    rows.push([s.date, q(ex.name), partName(ex.part),
+      k === 'weight' ? s.weight : '',
+      k === 'time' || k === 'cardio' ? '' : s.reps,
+      k === 'time' || k === 'cardio' ? s.reps : k === 'hiit' ? s.reps * s.weight : '',
+      k === 'cardio' ? s.weight : ''].join(','));
   }
-  download(`kintore-log-${today()}.csv`, '﻿' + rows.join('\r\n'), 'text/csv'); // BOM 付き＝Excel で文字化けしない
+  download(`kintore-log-${today()}.csv`, '\uFEFF' + rows.join('\r\n'), 'text/csv'); // BOM 付き＝Excel で文字化けしない
 }
 function importJson(file) {
   const reader = new FileReader();
@@ -974,7 +1217,8 @@ function viewMenu() {
           list.map((ex) => h('div', { class: 'row' + (ex.archived ? ' off' : '') },
             h('button', { type: 'button', class: 'row-main', onclick: () => exerciseDialog(ex) },
               h('b', {}, ex.name),
-              h('small', {}, ex.kind === 'weight' ? `重量×回数・${ex.step}kg刻み` : KINDS[ex.kind])),
+              h('small', {}, ex.kind === 'weight' ? `重量×回数・${ex.step}kg刻み`
+                : ex.kind === 'hiit' ? `${ex.defReps}本・高強度${ex.defWeight}秒／休憩${ex.rest}秒` : KINDS[ex.kind])),
             h('input', {
               type: 'checkbox', class: 'switch', checked: !ex.archived, 'aria-label': `${ex.name}を記録画面に表示`,
               onchange: (e) => { ex.archived = !e.target.checked; ex.u = Date.now(); save(); render(); },
@@ -1016,6 +1260,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (today() !== lastDay) { if (ui.date === lastDay) ui.date = today(); lastDay = today(); render(); }
   if (rest.end) drawRest();
+  if (hiit.on) { keepAwake(); tickHiit(); }
 });
 // 同期のタイミング: 起動時／アプリに戻ったとき／アプリを離れるとき（送り残しを出さない）／電波が戻ったとき
 document.addEventListener('visibilitychange', () => {

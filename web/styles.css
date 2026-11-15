@@ -17,7 +17,7 @@
   --danger: #c93a34;
   /* 部位の色（色覚多様性に配慮した並び） */
   --p-chest: #2a78d6; --p-back: #eb6834; --p-legs: #1baf7a; --p-shoulders: #eda100;
-  --p-arms: #e87ba4; --p-abs: #008300; --p-other: #6250d6;
+  --p-arms: #e87ba4; --p-abs: #008300; --p-hiit: #e34948; --p-cardio: #6250d6; --p-other: #8b9082;
   --r: 18px;
   --nav-h: 62px;
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -39,7 +39,7 @@
     --on-accent: #12160a;
     --danger: #ff6b63;
     --p-chest: #3987e5; --p-back: #d95926; --p-legs: #199e70; --p-shoulders: #c98500;
-    --p-arms: #d55181; --p-abs: #0ca30c; --p-other: #9085e9;
+    --p-arms: #d55181; --p-abs: #0ca30c; --p-hiit: #e66767; --p-cardio: #9085e9; --p-other: #7a8279;
     --shadow: none;
   }
 }
@@ -342,3 +342,43 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .steps a { color: var(--accent); font-weight: 700; }
 #sync-status.err { color: var(--danger); }
 .card.list .field { margin-bottom: 0; }
+
+/* ── HIIT ── */
+.btn.wide { width: 100%; margin-top: 8px; min-height: 44px; }
+.calc { text-align: center; font-size: 13px; font-weight: 700; color: var(--text-2); margin: 4px 0 12px; font-variant-numeric: tabular-nums; }
+.panel.k-hiit .stepper { margin: 10px 0; }
+.panel.k-hiit .stepper-value input { font-size: 38px; }
+.panel.k-hiit .round { width: 48px; height: 48px; font-size: 24px; }
+.panel.k-hiit .stepper-row { margin-bottom: 6px; }
+.field-row .field > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+#hiit {
+  position: fixed; inset: 0; z-index: 80; display: flex; flex-direction: column;
+  padding: calc(var(--safe-t) + 16px) 20px calc(var(--safe-b) + 24px);
+  background: var(--bg); color: var(--text); transition: background .25s, color .25s; --hiit-track: var(--surface-2); --hiit-fill: var(--text);
+}
+#hiit.ph-work { background: var(--accent); color: var(--on-accent); --hiit-track: color-mix(in srgb, var(--on-accent) 18%, transparent); --hiit-fill: var(--on-accent); }
+#hiit.ph-rest { background: color-mix(in srgb, var(--p-chest) 26%, var(--bg)); --hiit-track: color-mix(in srgb, var(--text) 14%, transparent); }
+#hiit.paused .hiit-num { opacity: .45; }
+.hiit-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hiit-name { font-weight: 700; font-size: 15px; opacity: .8; }
+#hiit .btn { color: inherit; background: var(--hiit-track); }
+#hiit .btn.ghost { border-color: currentColor; background: transparent; opacity: .8; }
+#hiit .btn.primary { background: var(--accent); color: var(--on-accent); }
+.hiit-main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 0; }
+.hiit-label { font-size: clamp(22px, 5vw, 34px); font-weight: 800; letter-spacing: .18em; }
+.hiit-label small { display: block; font-size: 14px; letter-spacing: .1em; color: inherit; opacity: .75; font-weight: 700; }
+.hiit-num { font-size: clamp(120px, min(46vw, 42vh), 340px); font-weight: 800; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; margin: 4px 0; }
+.hiit-round { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.hiit-track { width: min(520px, 100%); height: 8px; border-radius: 99px; background: var(--hiit-track); margin: 22px 0 10px; overflow: hidden; }
+.hiit-track i { display: block; height: 100%; width: 0; background: var(--hiit-fill); border-radius: 99px; }
+.hiit-next { width: min(520px, 100%); display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; opacity: .8; font-variant-numeric: tabular-nums; }
+.hiit-ctrl { display: flex; gap: 12px; justify-content: center; }
+.hiit-ctrl .btn { flex: 1; max-width: 250px; min-height: 58px; font-size: 17px; border-radius: 18px; }
+.hiit-ctrl.col { flex-direction: column; align-items: center; gap: 0; }
+.hiit-ctrl.col .btn { flex: none; width: min(420px, 100%); max-width: none; }
+.hiit-trophy { width: 84px; height: 84px; border-radius: 28px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; margin-bottom: 18px; }
+.hiit-trophy .ic { width: 40px; height: 40px; }
+.hiit-title { font-size: 30px; font-weight: 800; }
+.hiit-sum { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 8px; letter-spacing: -.02em; }
+.hiit-sub { font-size: 14px; color: var(--text-2); font-weight: 600; margin-top: 4px; }

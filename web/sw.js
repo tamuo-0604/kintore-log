@@ -1,6 +1,6 @@
 // オフラインでも開けるようにするための Service Worker。
 // 方針: まずキャッシュから即表示し、裏で最新版を取りに行って次回起動時に反映する。
-const CACHE = 'kintore-log-v2';
+const CACHE = 'kintore-log-v3';
 const FILES = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',

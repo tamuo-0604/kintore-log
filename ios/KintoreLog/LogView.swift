@@ -162,7 +162,15 @@ struct SetInputView: View {
                 if ex.kind == "weight" {
                     NumberStepper(label: "重量", unit: "kg", value: $weight, step: ex.step)
                 }
-                if ex.kind == "time" {
+                if ex.kind == "hiit" {
+                    // ネイティブ版はまだタイマー未対応。やった本数と秒数を手入力で記録する
+                    NumberStepper(label: "本数", unit: "本", value: $reps, step: 1, quick: [6, 8, 10, 12])
+                    NumberStepper(label: "高強度", unit: "秒", value: $weight, step: 5, quick: [20, 30, 40, 45, 60])
+                } else if ex.kind == "cardio" {
+                    NumberStepper(label: "距離", unit: "km", value: $weight, step: ex.step)
+                    NumberStepper(label: "時間", unit: "分", value: Binding(get: { (reps / 6).rounded() / 10 }, set: { reps = $0 * 60 }),
+                                  step: 1, quick: [15, 20, 30, 45, 60])
+                } else if ex.kind == "time" {
                     NumberStepper(label: "時間", unit: "秒", value: $reps, step: 5, quick: [30, 45, 60, 90, 120])
                 } else {
                     NumberStepper(label: "回数", unit: "回", value: $reps, step: 1, quick: [5, 8, 10, 12, 15, 20])
@@ -216,7 +224,7 @@ struct SetInputView: View {
             guard !loaded else { return }
             loaded = true
             // 初期値：今日の直前のセット → 前回の1セット目 → メニューの既定値
-            let base = todays.last ?? last?.sets.first
+            let base = ex.kind == "hiit" ? nil : (todays.last ?? last?.sets.first)
             weight = base?.weight ?? ex.defWeight
             reps = base?.reps ?? ex.defReps
         }

@@ -113,18 +113,21 @@ struct ExerciseEditor: View {
                     }
                 }
                 Section("最初の値") {
-                    if draft.kind == "weight" {
-                        LabeledContent("重量 (kg)") {
-                            TextField("0", value: $draft.defWeight, format: .number)
-                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    if draft.kind == "hiit" {
+                        numberRow("本数", $draft.defReps)
+                        numberRow("高強度 (秒)", $draft.defWeight)
+                        numberRow("インターバル (秒)", Binding(get: { draft.rest ?? 10 }, set: { draft.rest = $0 }))
+                    } else if draft.kind == "cardio" {
+                        numberRow("距離 (km)", $draft.defWeight)
+                        numberRow("時間 (分)", Binding(get: { (draft.defReps / 6).rounded() / 10 }, set: { draft.defReps = ($0 * 60).rounded() }))
+                    } else {
+                        if draft.kind == "weight" {
+                            numberRow("重量 (kg)", $draft.defWeight)
+                            Picker("＋−の刻み (kg)", selection: $draft.step) {
+                                ForEach([0.5, 1, 2, 2.5, 5, 10], id: \.self) { v in Text(formatNumber(v)).tag(v) }
+                            }
                         }
-                        Picker("＋−の刻み (kg)", selection: $draft.step) {
-                            ForEach([0.5, 1, 2, 2.5, 5, 10], id: \.self) { v in Text(formatNumber(v)).tag(v) }
-                        }
-                    }
-                    LabeledContent(draft.kind == "time" ? "秒数" : "回数") {
-                        TextField("0", value: $draft.defReps, format: .number)
-                            .keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                        numberRow(draft.kind == "time" ? "秒数" : "回数", $draft.defReps)
                     }
                 }
                 if !isNew {
@@ -157,7 +160,15 @@ struct ExerciseEditor: View {
             }
         }
     }
+
+    private func numberRow(_ label: String, _ value: Binding<Double>) -> some View {
+        LabeledContent(label) {
+            TextField("0", value: value, format: .number)
+                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+        }
+    }
 }
+
 
 struct BackupDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }

@@ -8,12 +8,13 @@ struct Exercise: Codable, Identifiable, Hashable {
     var id: String
     var name: String
     var part: String      // chest / back / legs / shoulders / arms / abs / other
-    var kind: String      // weight=重量×回数 / body=回数のみ / time=秒数
+    var kind: String      // weight=重量×回数 / body=回数のみ / time=秒数 / hiit=HIIT / cardio=距離×時間
     var step: Double
     var defWeight: Double
     var defReps: Double
     var archived: Bool
     var u: Double? = nil  // 最終更新時刻（ミリ秒）。同期で「新しいほう」を選ぶのに使う
+    var rest: Double? = nil // HIIT のインターバル秒数
 }
 
 struct WorkoutSet: Codable, Identifiable, Hashable {
@@ -21,8 +22,11 @@ struct WorkoutSet: Codable, Identifiable, Hashable {
     var exId: String
     var date: String      // "YYYY-MM-DD"
     var ts: Double        // 記録時刻（ミリ秒）
+    // weight / reps の意味は記録タイプで変わる（PWA 版と同じ）:
+    //   weight … 重量(kg) / 回数    time … (未使用) / 秒数
+    //   hiit … 高強度の秒数 / やった本数    cardio … 距離(km) / 時間(秒)
     var weight: Double
-    var reps: Double      // time タイプのときは秒数
+    var reps: Double
     var u: Double? = nil
 }
 
@@ -61,7 +65,9 @@ let bodyParts: [BodyPart] = [
     BodyPart(id: "shoulders", name: "肩", color: Color(red: 0.79, green: 0.52, blue: 0.0)),
     BodyPart(id: "arms", name: "腕", color: Color(red: 0.84, green: 0.32, blue: 0.51)),
     BodyPart(id: "abs", name: "腹", color: Color(red: 0.05, green: 0.64, blue: 0.05)),
-    BodyPart(id: "other", name: "その他", color: Color(red: 0.56, green: 0.52, blue: 0.91)),
+    BodyPart(id: "hiit", name: "HIIT", color: Color(red: 0.90, green: 0.40, blue: 0.40)),
+    BodyPart(id: "cardio", name: "有酸素", color: Color(red: 0.56, green: 0.52, blue: 0.91)),
+    BodyPart(id: "other", name: "その他", color: Color(red: 0.48, green: 0.51, blue: 0.47)),
 ]
 
 func bodyPart(_ id: String) -> BodyPart {
@@ -77,6 +83,8 @@ let kindNames: [RecordKind] = [
     RecordKind(id: "weight", name: "重量 × 回数"),
     RecordKind(id: "body", name: "回数のみ（自重）"),
     RecordKind(id: "time", name: "時間（秒）"),
+    RecordKind(id: "hiit", name: "HIIT"),
+    RecordKind(id: "cardio", name: "距離 × 時間（ランニングなど）"),
 ]
 
 // MARK: - 日付の小道具
@@ -160,8 +168,10 @@ final class Store: ObservableObject {
     static func defaultData() -> AppData {
         // id は PWA 版と同じ固定値。どの端末でも「同じメニュー」として扱える
         func e(_ key: String, _ name: String, _ part: String, _ kind: String, _ w: Double, _ r: Double, _ step: Double = 2.5) -> Exercise {
-            Exercise(id: "seed-" + key, name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false, u: 0)
+            Exercise(id: "seed-" + key, name: name, part: part, kind: kind, step: step, defWeight: w, defReps: r, archived: false, u: 0, rest: 10)
         }
+        var hiit3030 = e("hiit-30-30", "HIIT 30-30", "hiit", "hiit", 30, 10)
+        hiit3030.rest = 30
         return AppData(
             version: 1,
             exercises: [
@@ -180,6 +190,10 @@ final class Store: ObservableObject {
                 e("triceps-pressdown", "トライセプスプレスダウン", "arms", "weight", 20, 12),
                 e("crunch", "クランチ", "abs", "body", 0, 20),
                 e("plank", "プランク", "abs", "time", 0, 60),
+                e("hiit-tabata", "タバタ式（20秒×8本）", "hiit", "hiit", 20, 8),
+                hiit3030,
+                e("running", "ランニング", "cardio", "cardio", 5, 1800, 0.5),
+                e("walking", "ウォーキング", "cardio", "cardio", 3, 1800, 0.5),
             ],
             sets: [],
             settings: AppSettings(restSec: 90, restAuto: true, sound: true, u: 0),
@@ -209,16 +223,31 @@ final class Store: ObservableObject {
 
     /// 強さの指標。重量種目は推定1RM（Epley式）、それ以外は回数／秒数
     func score(_ ex: Exercise, _ s: WorkoutSet) -> Double {
-        guard ex.kind == "weight" else { return s.reps }
-        return s.reps <= 1 ? s.weight : s.weight * (1 + s.reps / 30)
+        switch ex.kind {
+        case "weight": return s.reps <= 1 ? s.weight : s.weight * (1 + s.reps / 30)
+        case "hiit": return s.reps * s.weight                       // 高強度の合計秒数
+        case "cardio": return ex.defWeight > 0 ? s.weight : s.reps / 60 // km または 分
+        default: return s.reps
+        }
     }
 
     func scoreLabel(_ ex: Exercise) -> String {
-        ex.kind == "weight" ? "推定1RM" : (ex.kind == "time" ? "最長時間" : "最高回数")
+        switch ex.kind {
+        case "weight": return "推定1RM"
+        case "time": return "最長時間"
+        case "hiit": return "高強度の合計"
+        case "cardio": return ex.defWeight > 0 ? "最長距離" : "最長時間"
+        default: return "最高回数"
+        }
     }
 
     func unit(_ ex: Exercise) -> String {
-        ex.kind == "weight" ? "kg" : (ex.kind == "time" ? "秒" : "回")
+        switch ex.kind {
+        case "weight": return "kg"
+        case "time", "hiit": return "秒"
+        case "cardio": return ex.defWeight > 0 ? "km" : "分"
+        default: return "回"
+        }
     }
 
     func volume(_ s: WorkoutSet) -> Double {
@@ -230,6 +259,10 @@ final class Store: ObservableObject {
         switch ex.kind {
         case "weight": return "\(formatNumber(s.weight))kg × \(Int(s.reps))"
         case "time": return "\(Int(s.reps))秒"
+        case "hiit": return "\(Int(s.reps))本 × \(formatNumber(s.weight))秒"
+        case "cardio":
+            let minutes = "\(formatNumber(s.reps / 60))分"
+            return s.weight > 0 ? "\(formatNumber(s.weight))km・\(minutes)" : minutes
         default: return "\(Int(s.reps))回"
         }
     }
@@ -256,9 +289,10 @@ final class Store: ObservableObject {
         let previousBest = best(ex)
         let now = Store.nowMs
         let s = WorkoutSet(id: Store.newID(), exId: ex.id, date: date, ts: now,
-                           weight: ex.kind == "weight" ? weight : 0, reps: reps.rounded(), u: now)
+                           weight: ["weight", "hiit", "cardio"].contains(ex.kind) ? weight : 0, reps: reps.rounded(), u: now)
         data.sets.append(s)
-        if data.settings.restAuto && date == Day.today {
+        // セット間の休憩タイマーは筋トレ系だけ
+        if data.settings.restAuto && date == Day.today && ex.kind != "hiit" && ex.kind != "cardio" {
             restEnd = Date().addingTimeInterval(data.settings.restSec)
         }
         if let b = previousBest { return score(ex, s) > b + 1e-9 }
