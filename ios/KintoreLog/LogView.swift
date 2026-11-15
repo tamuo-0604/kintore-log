@@ -122,6 +122,8 @@ struct SetInputView: View {
     @State private var loaded = false
     @State private var recordCount = 0
     @State private var message: String?
+    @State private var interval: Double = 10   // HIIT のインターバル秒数
+    @State private var showTimer = false
 
     var body: some View {
         if let ex = store.exercise(exerciseID) {
@@ -163,9 +165,9 @@ struct SetInputView: View {
                     NumberStepper(label: "重量", unit: "kg", value: $weight, step: ex.step)
                 }
                 if ex.kind == "hiit" {
-                    // ネイティブ版はまだタイマー未対応。やった本数と秒数を手入力で記録する
-                    NumberStepper(label: "本数", unit: "本", value: $reps, step: 1, quick: [6, 8, 10, 12])
+                    NumberStepper(label: "本数（セット数）", unit: "本", value: $reps, step: 1, quick: [6, 8, 10, 12])
                     NumberStepper(label: "高強度", unit: "秒", value: $weight, step: 5, quick: [20, 30, 40, 45, 60])
+                    NumberStepper(label: "インターバル（休憩）", unit: "秒", value: $interval, step: 5, quick: [10, 15, 20, 30, 60])
                 } else if ex.kind == "cardio" {
                     NumberStepper(label: "距離", unit: "km", value: $weight, step: ex.step)
                     NumberStepper(label: "時間", unit: "分", value: Binding(get: { (reps / 6).rounded() / 10 }, set: { reps = $0 * 60 }),
@@ -176,17 +178,38 @@ struct SetInputView: View {
                     NumberStepper(label: "回数", unit: "回", value: $reps, step: 1, quick: [5, 8, 10, 12, 15, 20])
                 }
 
+                if ex.kind == "hiit" {
+                    Button {
+                        guard reps >= 1, weight >= 1 else { return }
+                        showTimer = true
+                    } label: {
+                        Text("タイマーをスタート")
+                            .font(.title3.bold())
+                            .frame(maxWidth: .infinity, minHeight: 60)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                            .foregroundStyle(Color(.systemBackground))
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Button {
                     guard reps > 0 else { return }
                     let isBest = store.addSet(ex, date: date, weight: weight, reps: reps)
                     message = isBest ? "🏆 自己ベスト更新！" : nil
                     recordCount += 1
                 } label: {
-                    Text("\(todays.count + 1)セット目を記録")
-                        .font(.title3.bold())
-                        .frame(maxWidth: .infinity, minHeight: 60)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
-                        .foregroundStyle(Color(.systemBackground))
+                    if ex.kind == "hiit" {
+                        Text("タイマーを使わずに記録だけする")
+                            .font(.subheadline.bold())
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14))
+                    } else {
+                        Text(ex.kind == "cardio" ? "記録する" : "\(todays.count + 1)セット目を記録")
+                            .font(.title3.bold())
+                            .frame(maxWidth: .infinity, minHeight: 60)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                            .foregroundStyle(Color(.systemBackground))
+                    }
                 }
                 .buttonStyle(.plain)
                 .sensoryFeedback(.success, trigger: recordCount)
@@ -220,6 +243,15 @@ struct SetInputView: View {
             .padding(20)
             .padding(.bottom, 80)
         }
+        .fullScreenCover(isPresented: $showTimer) {
+            HiitTimerView(name: ex.name, rounds: Int(reps), work: Int(weight), rest: Int(interval)) { doneRounds in
+                if let n = doneRounds, n > 0 {
+                    store.addSet(ex, date: date, weight: weight.rounded(), reps: Double(n))
+                    recordCount += 1
+                }
+                showTimer = false
+            }
+        }
         .onAppear {
             guard !loaded else { return }
             loaded = true
@@ -227,6 +259,7 @@ struct SetInputView: View {
             let base = ex.kind == "hiit" ? nil : (todays.last ?? last?.sets.first)
             weight = base?.weight ?? ex.defWeight
             reps = base?.reps ?? ex.defReps
+            interval = ex.rest ?? 10
         }
     }
 
