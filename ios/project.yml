@@ -9,11 +9,17 @@ targets:
     type: application
     platform: iOS
     sources: [KintoreLog]
+    # ヘルスケア（HealthKit）を使うための許可設定
+    entitlements:
+      path: KintoreLog/KintoreLog.entitlements
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.kintorelog   # 実機に入れるときは自分だけの文字列に変更
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: 筋トレログ
+        # ヘルスケアの許可画面に表示される説明（これがないと許可を求めた瞬間にアプリが落ちる）
+        INFOPLIST_KEY_NSHealthShareUsageDescription: 体重・体脂肪率・ウエスト・身長を読み込み、からだの記録に表示するために使います。
+        INFOPLIST_KEY_NSHealthUpdateUsageDescription: このアプリで記録した体重などと、HIIT・有酸素のワークアウトをヘルスケアに保存するために使います。
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

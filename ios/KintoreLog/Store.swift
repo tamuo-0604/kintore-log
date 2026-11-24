@@ -308,6 +308,7 @@ final class Store: ObservableObject {
         let s = WorkoutSet(id: Store.newID(), exId: ex.id, date: date, ts: now,
                            weight: ["weight", "hiit", "cardio"].contains(ex.kind) ? weight : 0, reps: reps.rounded(), u: now)
         data.sets.append(s)
+        if date == Day.today { HealthSync.shared.recordWorkout(ex, s) } // HIIT・有酸素はヘルスケアにも保存
         // セット間の休憩タイマーは筋トレ系だけ
         if data.settings.restAuto && date == Day.today && ex.kind != "hiit" && ex.kind != "cardio" {
             restEnd = Date().addingTimeInterval(data.settings.restSec)
@@ -359,6 +360,7 @@ final class Store: ObservableObject {
                                muscle: (muscle * 10).rounded() / 10, waist: (waist * 10).rounded() / 10))
         d.body = list.sorted { $0.date < $1.date }
         data = d
+        if let saved = list.first(where: { $0.id == id }) { HealthSync.shared.exportBody(saved) }
     }
 
     func deleteBody(_ id: String) {
@@ -370,6 +372,7 @@ final class Store: ObservableObject {
         tomb.body = bodyTomb
         d.deleted = tomb
         data = d
+        HealthSync.shared.removeBody(date: String(id.dropFirst(2))) // id は "b-日付"
     }
 
     func setGoalWeight(_ kg: Double) {
@@ -384,6 +387,7 @@ final class Store: ObservableObject {
         d.settings.height = (cm * 10).rounded() / 10
         d.settings.u = Store.nowMs
         data = d
+        HealthSync.shared.exportHeight(d.settings.height ?? 0)
     }
 
     // MARK: バックアップ

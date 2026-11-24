@@ -8,6 +8,7 @@ struct MenuView: View {
     @State private var exporting = false
     @State private var importing = false
     @State private var notice: String?
+    @ObservedObject private var health = HealthSync.shared
 
     var body: some View {
         NavigationStack {
@@ -35,6 +36,28 @@ struct MenuView: View {
                             PartLabel(part: p.id)
                         }
                     }
+                }
+
+                Section {
+                    if health.available {
+                        Toggle("ヘルスケアと連携", isOn: Binding(
+                            get: { health.enabled },
+                            set: { $0 ? health.turnOn() : health.turnOff() }
+                        ))
+                        if health.enabled {
+                            Button(health.busy ? "読み込み中…" : "今すぐ読み込む") { health.importNow() }
+                                .disabled(health.busy)
+                        }
+                    } else {
+                        Text("この端末ではヘルスケアを使えません").foregroundStyle(.secondary)
+                    }
+                    if !health.status.isEmpty {
+                        Text(health.status).font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("ヘルスケア")
+                } footer: {
+                    Text("体重・体脂肪率・ウエスト・身長をヘルスケアから読み込み、このアプリで記録した値はヘルスケアにも保存します。HIIT と有酸素はワークアウトとして保存します。読み込めないときは、iPhone の「設定」→「ヘルスケア」→「データアクセスとデバイス」→「筋トレログ」で許可を確認してください。")
                 }
 
                 Section("休憩タイマー") {

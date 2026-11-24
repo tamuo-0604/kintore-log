@@ -14,6 +14,7 @@ struct KintoreLogApp: App {
 
 struct RootView: View {
     @EnvironmentObject var store: Store
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView {
@@ -24,6 +25,14 @@ struct RootView: View {
             MenuView().tabItem { Label("メニュー", systemImage: "list.bullet") }
         }
         .safeAreaInset(edge: .bottom) { RestTimerBar().padding(.bottom, 56) }
+        // アプリを開いたとき・戻ってきたときに、ヘルスケアの新しいデータを読み込む（連携オンのときだけ）
+        .onAppear {
+            HealthSync.shared.store = store
+            HealthSync.shared.importNow()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { HealthSync.shared.importNow() }
+        }
     }
 }
 

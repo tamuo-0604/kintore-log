@@ -15,5 +15,13 @@ jobs:
       - run: >
           xcodebuild -project KintoreLog.xcodeproj -scheme KintoreLog
           -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build
           CODE_SIGNING_ALLOWED=NO build
+        working-directory: ios
+      # ヘルスケアの説明文がアプリに入っているかを確かめる（抜けていると実機で落ちるため）
+      - name: Check Info.plist
+        run: |
+          PLIST=build/Build/Products/Debug-iphonesimulator/KintoreLog.app/Info.plist
+          plutil -p "$PLIST" | grep NSHealth
+          test "$(plutil -p "$PLIST" | grep -cE 'NSHealth(Share|Update)UsageDescription')" -eq 2
         working-directory: ios
